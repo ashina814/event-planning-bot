@@ -1,0 +1,323 @@
+import type { Client, GuildMember, Message } from "discord.js";
+import { config } from "../../config.js";
+import type { EventsRepo } from "../../db/repos/events.js";
+import type { ExpensesRepo } from "../../db/repos/expenses.js";
+import type { JobsRepo } from "../../db/repos/jobs.js";
+import type { RolesRepo } from "../../db/repos/roles.js";
+import { isEventLead } from "../../lib/permission.js";
+import { parseDiscordSnowflake } from "../../lib/parser.js";
+import {
+  formatJstDate,
+  formatJstPlainDate,
+  jstDateTimeToUnix,
+  jstDateToUnixAtMidnight,
+  unixNow
+} from "../../lib/time.js";
+import type {
+  EventRecord,
+  EventRoleRecord,
+  ExpenseRecord,
+  ExpenseThresholdKind
+} from "../../types/index.js";
+import { parseAmount, parseExpenseCategory, parseExpenseDirection } from "./parser.js";
+
+interface CreateExpenseInput {
+  category: string;
+  direction: string;
+  amount: string;
+  recipient: string;
+  occurredMemo: string;
+}
+
+export interface ExpensePanel {
+  expenses: ExpenseRecord[];
+  totalOut: number;
+  totalIn: number;
+  pendingProofCount: number;
+}
+
+export class ExpensePermissionError extends Error {
+  override name = "ExpensePermissionError";
+}
+
+export class ExpenseService {
+  constructor(
+    private readonly client: Client,
+    private readonly expensesRepo: ExpensesRepo,
+    private readonly eventsRepo: EventsRepo,
+    private readonly rolesRepo: RolesRepo,
+    private readonly jobsRepo: JobsRepo
+  ) {}
+
+  getPanel(threadId: string): ExpensePanel {
+    return {
+      expenses: this.expensesRepo.listByThread(threadId),
+      totalOut: this.expensesRepo.totalByThread(threadId, "out"),
+      totalIn: this.expensesRepo.totalByThread(threadId, "in"),
+      pendingProofCount: this.expensesRepo.pendingProofCount(threadId)
+    };
+  }
+
+  async create(member: GuildMember, threadId: string, input: CreateExpenseInput): Promise<ExpenseRecord> {
+    const event = this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanRecord(member, roles);
+
+    const category = parseExpenseCategory(input.category);
+    const direction = parseExpenseDirection(input.direction);
+    const amount = parseAmount(input.amount);
+    const recipientId = input.recipient.trim()
+      ? parseDiscordSnowflake(input.recipient, "last")
+      : null;
+    if (input.recipient.trim() && !recipientId) {
+      throw new Error("対象者は @ユーザー またはユーザーIDで入力してください。");
+    }
+
+    const { occurredAt, memo } = parseOccurredMemo(input.occurredMemo);
+    const now = unixNow();
+    const id = this.expensesRepo.create({
+      threadId,
+      category,
+      amount,
+      direction,
+      recipientId,
+      responderId: member.id,
+      memo,
+      occurredAt,
+      now
+    });
+
+    this.jobsRepo.create({
+      kind: "expense_proof_timeout",
+      payload: { expenseId: id },
+      fireAt: now + 5 * 60,
+      now
+    });
+
+    const expense = this.requireExpense(id);
+    await this.checkThresholds(event, expense);
+    return expense;
+  }
+
+  async handleProofMessage(message: Message): Promise<void> {
+    if (message.author.bot) {
+      return;
+    }
+
+    const proofUrl = firstImageUrl(message);
+    if (!proofUrl) {
+      return;
+    }
+
+    const now = unixNow();
+    const expense = this.expensesRepo.findLatestPendingProof(message.author.id, now - 5 * 60);
+    if (!expense) {
+      return;
+    }
+
+    this.expensesRepo.markProofAttached(expense.id, proofUrl, message.id);
+    const attached = this.requireExpense(expense.id);
+    await this.postExpenseLog(attached);
+
+    if ("send" in message.channel) {
+      await message.channel.send({
+        content: `💰 出費 #${attached.id} の証明画像を紐付けました。`
+      });
+    }
+  }
+
+  async handleProofTimeout(expenseId: number): Promise<void> {
+    const expense = this.expensesRepo.get(expenseId);
+    if (!expense || expense.proof_status !== "pending_proof" || !expense.thread_id) {
+      return;
+    }
+
+    const channel = await this.client.channels.fetch(expense.thread_id);
+    if (channel && "send" in channel) {
+      await channel.send({
+        content: `⚠️ <@${expense.responder_id}> 出費 #${expense.id} の証明画像がまだ添付されていません。5分以内に拾えなかったので、画像付きメッセージを再投稿してください。`
+      });
+    }
+  }
+
+  private async postExpenseLog(expense: ExpenseRecord): Promise<void> {
+    if (!config.channels.expenseLog) {
+      return;
+    }
+
+    const event = expense.thread_id ? this.eventsRepo.get(expense.thread_id) : null;
+    const channel = await this.client.channels.fetch(config.channels.expenseLog);
+    if (!channel || !("send" in channel)) {
+      throw new Error("出費ログチャンネルが見つかりません。");
+    }
+
+    await channel.send({
+      content: buildExpenseLogMessage(event, expense)
+    });
+  }
+
+  private async checkThresholds(event: EventRecord, expense: ExpenseRecord): Promise<void> {
+    if (expense.direction !== "out" || !expense.thread_id) {
+      return;
+    }
+
+    const now = unixNow();
+    this.expensesRepo.ensureDefaultThresholds(now);
+    await this.checkPerTx(event, expense);
+    await this.checkScopedThreshold("per_event", event.thread_id, event.title, () =>
+      this.expensesRepo.totalByThread(event.thread_id, "out")
+    );
+
+    const monthKey = formatJstPlainDate(expense.occurred_at).slice(0, 7);
+    await this.checkScopedThreshold("per_month", monthKey, `${monthKey} 月合計`, () => {
+      const { startAt, endAt } = monthBounds(monthKey);
+      return this.expensesRepo.totalBetween(startAt, endAt, "out");
+    });
+  }
+
+  private async checkPerTx(event: EventRecord, expense: ExpenseRecord): Promise<void> {
+    const threshold = this.expensesRepo.getThreshold("per_tx");
+    if (!threshold || !threshold.enabled || expense.amount <= threshold.threshold) {
+      return;
+    }
+
+    await this.sendThresholdAlert(
+      `出費単発アラート: ${event.title}`,
+      expense.amount,
+      threshold.threshold,
+      `出費 #${expense.id}`
+    );
+  }
+
+  private async checkScopedThreshold(
+    kind: ExpenseThresholdKind,
+    scopeKey: string,
+    title: string,
+    total: () => number
+  ): Promise<void> {
+    const threshold = this.expensesRepo.getThreshold(kind);
+    if (!threshold || !threshold.enabled) {
+      return;
+    }
+
+    const currentTotal = total();
+    if (currentTotal <= threshold.threshold || this.expensesRepo.hasAlertFired(kind, scopeKey)) {
+      return;
+    }
+
+    const now = unixNow();
+    this.expensesRepo.markAlertFired(kind, scopeKey, now);
+    await this.sendThresholdAlert(title, currentTotal, threshold.threshold, scopeKey);
+  }
+
+  private async sendThresholdAlert(
+    title: string,
+    amount: number,
+    threshold: number,
+    scope: string
+  ): Promise<void> {
+    const content = [
+      `💰 <@&${config.roles.eventLead}> 出費閾値を超えました。`,
+      `対象: ${title}`,
+      `金額: ${amount.toLocaleString("ja-JP")} Land`,
+      `閾値: ${threshold.toLocaleString("ja-JP")} Land`,
+      `scope: ${scope}`
+    ].join("\n");
+
+    const channelId = config.channels.internalAnnounce || config.channels.expenseLog;
+    if (!channelId) {
+      return;
+    }
+
+    const channel = await this.client.channels.fetch(channelId);
+    if (channel && "send" in channel) {
+      await channel.send({ content });
+    }
+  }
+
+  private assertCanRecord(member: GuildMember, roles: EventRoleRecord[]): void {
+    if (isEventLead(member)) {
+      return;
+    }
+
+    const isPrize = roles.some((role) => role.role_type === "prize" && role.user_id === member.id);
+    if (!isPrize) {
+      throw new ExpensePermissionError("出費記録は賞金・景品対応担当またはイベント統括のみ可能です。");
+    }
+  }
+
+  private requireEvent(threadId: string): EventRecord {
+    const event = this.eventsRepo.get(threadId);
+    if (!event) {
+      throw new Error("イベントが DB に見つかりません。");
+    }
+    return event;
+  }
+
+  private requireExpense(expenseId: number): ExpenseRecord {
+    const expense = this.expensesRepo.get(expenseId);
+    if (!expense) {
+      throw new Error("出費記録が DB に見つかりません。");
+    }
+    return expense;
+  }
+}
+
+function parseOccurredMemo(input: string): { occurredAt: number; memo: string | null } {
+  const lines = input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  const date = lines[0] ?? formatJstPlainDate(unixNow());
+  const memo = lines.slice(1).join("\n") || null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { occurredAt: jstDateToUnixAtMidnight(date), memo };
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/.test(date)) {
+    return { occurredAt: jstDateTimeToUnix(date), memo };
+  }
+
+  throw new Error("発生日は YYYY-MM-DD または YYYY-MM-DD HH:mm で入力してください。");
+}
+
+function firstImageUrl(message: Message): string | null {
+  const attachment = message.attachments.find((item) => {
+    const contentType = item.contentType ?? "";
+    const name = item.name ?? "";
+    return contentType.startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(name);
+  });
+  return attachment?.url ?? null;
+}
+
+function buildExpenseLogMessage(event: EventRecord | null, expense: ExpenseRecord): string {
+  return [
+    `**【イベント名】**：${event?.title ?? "未紐付け"}`,
+    `**【支払日】**：${formatJstDate(expense.occurred_at)}`,
+    `**【金額・賞品】**：${expense.amount.toLocaleString("ja-JP")} Land`,
+    `**【対象者】**：${expense.recipient_id ? `<@${expense.recipient_id}>` : "未設定"}`,
+    `**【対応者】**：<@${expense.responder_id}>`,
+    `**【カテゴリ】**：${expense.category}`,
+    `**【方向】**：${expense.direction}`,
+    `**【用途メモ】**：${expense.memo ?? "なし"}`,
+    `**【証明画像】**：${expense.proof_url ?? "未添付"}`
+  ].join("\n");
+}
+
+function monthBounds(monthKey: string): { startAt: number; endAt: number } {
+  const match = monthKey.match(/^(\d{4})-(\d{2})$/);
+  if (!match) {
+    throw new Error("monthKey must be YYYY-MM");
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  return {
+    startAt: jstDateToUnixAtMidnight(`${monthKey}-01`),
+    endAt: jstDateToUnixAtMidnight(`${nextYear}-${String(nextMonth).padStart(2, "0")}-01`)
+  };
+}

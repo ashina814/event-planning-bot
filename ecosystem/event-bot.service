@@ -1,0 +1,18 @@
+[Unit]
+Description=Event Planning Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=eventbot
+WorkingDirectory=/opt/event-bot
+ExecStart=/usr/bin/node /opt/event-bot/dist/index.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=NODE_ENV=production
+Environment=TZ=Asia/Tokyo
+
+[Install]
+WantedBy=multi-user.target
