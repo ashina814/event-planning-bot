@@ -4,21 +4,13 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from "discord.js";
-import type { BotSettings, TodoRecord } from "../types/index.js";
+import type { BotSettings, ExpenseCategory, ExpenseDirection, ParticipantsMode, RoleType, TodoRecord } from "../types/index.js";
 
-export function buildHandoverModal(threadId: string): ModalBuilder {
+export function buildHandoverModal(threadId: string, roleType: RoleType): ModalBuilder {
   return new ModalBuilder()
-    .setCustomId(`event:handover-submit:${threadId}`)
+    .setCustomId(`event:handover-submit:${threadId}:${roleType}`)
     .setTitle("引き継ぎ宣言")
     .addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("role_type")
-          .setLabel("役割")
-          .setPlaceholder("main / mc / announce / record / prize / support")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId("new_user")
@@ -213,24 +205,18 @@ export function buildTimerSetupModal(threadId: string): ModalBuilder {
     );
 }
 
-export function buildParticipantsSetupModal(threadId: string): ModalBuilder {
-  return new ModalBuilder()
-    .setCustomId(`participants:setup-submit:${threadId}`)
-    .setTitle("参加者カウント設定")
-    .addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("mode")
-          .setLabel("方式")
-          .setPlaceholder("reaction または post")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
+export function buildParticipantsSetupModal(threadId: string, mode: ParticipantsMode): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId(`participants:setup-${mode}:${threadId}`)
+    .setTitle(`参加者カウント設定`);
+
+  if (mode === "reaction") {
+    return modal.addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId("target")
           .setLabel("対象")
-          .setPlaceholder("リアクション: メッセージURL / 投稿: チャンネル・スレッドID")
+          .setPlaceholder("DiscordメッセージURL または メッセージID")
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       ),
@@ -251,6 +237,26 @@ export function buildParticipantsSetupModal(threadId: string): ModalBuilder {
           .setRequired(false)
       )
     );
+  }
+
+  return modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("target")
+        .setLabel("対象チャンネル/スレッド")
+        .setPlaceholder("チャンネルID または スレッドID")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("deadline")
+        .setLabel("締切")
+        .setPlaceholder("空なら開催日時。例: 明日 22:00 / 6/29 22:00")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+    )
+  );
 }
 
 export function buildTodoAddModal(threadId: string): ModalBuilder {
@@ -319,28 +325,15 @@ export function buildMinutesTodoAdoptModal(threadId: string, todo: TodoRecord): 
     );
 }
 
-export function buildExpenseCreateModal(threadId: string): ModalBuilder {
+export function buildExpenseCreateModal(
+  threadId: string,
+  category: ExpenseCategory,
+  direction: ExpenseDirection
+): ModalBuilder {
   return new ModalBuilder()
-    .setCustomId(`expense:create-submit:${threadId}`)
+    .setCustomId(`expense:new-submit:${threadId}:${category}:${direction}`)
     .setTitle("出費記録")
     .addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("category")
-          .setLabel("カテゴリ")
-          .setPlaceholder("prize / gift / operation / other")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("direction")
-          .setLabel("方向")
-          .setPlaceholder("out または in")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setValue("out")
-      ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId("amount")
@@ -359,7 +352,7 @@ export function buildExpenseCreateModal(threadId: string): ModalBuilder {
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
-          .setCustomId("occurred_memo")
+          .setCustomId("occurred_at_and_memo")
           .setLabel("発生日とメモ")
           .setPlaceholder("1行目: 発生日 (例: 今日 / 6/29 / 2026-06-29)\n2行目以降: 用途メモ")
           .setStyle(TextInputStyle.Paragraph)

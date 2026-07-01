@@ -5,10 +5,26 @@ import {
   StringSelectMenuBuilder,
   UserSelectMenuBuilder
 } from "discord.js";
-import type { AnnouncementRecord, EventRecord, EventStatus, RoleType, TodoRecord } from "../types/index.js";
+import {
+  expenseCategories,
+  expenseDirections,
+  roleTypes,
+  type AnnouncementRecord,
+  type EventRecord,
+  type EventStatus,
+  type ParticipantsMode,
+  type RoleType,
+  type TodoRecord
+} from "../types/index.js";
 import type { ParticipantsConfigRecord } from "../types/index.js";
 import type { TimerScheduleRecord } from "../types/index.js";
-import { roleLabels, statusLabels } from "./labels.js";
+import {
+  expenseCategoryLabels,
+  expenseDirectionLabels,
+  participantsModeLabels,
+  roleLabels,
+  statusLabels
+} from "./labels.js";
 import { shiftMonthKey } from "../features/overview/calendar.js";
 
 function selectText(value: string, maxLength: number): string {
@@ -123,12 +139,27 @@ export function buildStatusSelect(
 }
 
 export function buildRoleTypeSelect(threadId: string): ActionRowBuilder<StringSelectMenuBuilder>[] {
-  const roleTypes: RoleType[] = ["main", "mc", "announce", "record", "prize", "support"];
   return [
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`event:role-type:${threadId}`)
         .setPlaceholder("変更する担当")
+        .addOptions(
+          roleTypes.map((roleType) => ({
+            label: roleLabels[roleType],
+            value: roleType
+          }))
+        )
+    )
+  ];
+}
+
+export function buildHandoverRoleSelect(threadId: string): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`event:handover-role:${threadId}`)
+        .setPlaceholder("引き継ぐ役割を選択")
         .addOptions(
           roleTypes.map((roleType) => ({
             label: roleLabels[roleType],
@@ -274,6 +305,23 @@ export function buildParticipantsPanelComponents(
   ];
 }
 
+export function buildParticipantsModeSelect(threadId: string): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  const modes: ParticipantsMode[] = ["reaction", "post"];
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`participants:mode-select:${threadId}`)
+        .setPlaceholder("参加者カウント方式を選択")
+        .addOptions(
+          modes.map((mode) => ({
+            label: participantsModeLabels[mode] ?? mode,
+            value: mode
+          }))
+        )
+    )
+  ];
+}
+
 export function buildTodoPanelComponents(
   threadId: string,
   todos: TodoRecord[]
@@ -406,6 +454,42 @@ export function buildExpensePanelComponents(threadId: string): ActionRowBuilder<
         .setEmoji("➕")
         .setLabel("記録追加")
         .setStyle(ButtonStyle.Primary)
+    )
+  ];
+}
+
+export function buildExpenseCategorySelect(threadId: string): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`expense:new-category:${threadId}`)
+        .setPlaceholder("出費カテゴリを選択")
+        .addOptions(
+          expenseCategories.map((category) => ({
+            label: expenseCategoryLabels[category] ?? category,
+            value: category
+          }))
+        )
+    )
+  ];
+}
+
+export function buildExpenseDirectionSelect(
+  threadId: string,
+  category: string
+): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`expense:new-direction:${threadId}:${category}`)
+        .setPlaceholder("出費か補填・返金かを選択")
+        .addOptions(
+          expenseDirections.map((direction) => ({
+            label: expenseDirectionLabels[direction] ?? direction,
+            value: direction,
+            default: direction === "out"
+          }))
+        )
     )
   ];
 }

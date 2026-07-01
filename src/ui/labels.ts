@@ -18,6 +18,23 @@ export const roleLabels: Record<RoleType, string> = {
   support: "サポート"
 };
 
+export const expenseCategoryLabels: Record<string, string> = {
+  prize: "賞金",
+  gift: "景品",
+  operation: "運営費",
+  other: "その他"
+};
+
+export const expenseDirectionLabels: Record<string, string> = {
+  out: "出費",
+  in: "補填・返金"
+};
+
+export const participantsModeLabels: Record<string, string> = {
+  reaction: "リアクション方式",
+  post: "投稿方式"
+};
+
 export function mentionUser(userId: string | null | undefined): string {
   return userId ? `<@${userId}>` : "未定";
 }

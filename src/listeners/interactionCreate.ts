@@ -15,15 +15,30 @@ import { fetchGuildMember, PermissionError } from "../lib/permission.js";
 import { parseDiscordUserId } from "../lib/parser.js";
 import { formatJstDateTime } from "../lib/time.js";
 import { logger } from "../lib/logger.js";
-import { eventStatuses, roleTypes, type EventStatus, type RoleType, type SettingKey } from "../types/index.js";
+import {
+  eventStatuses,
+  expenseCategories,
+  expenseDirections,
+  roleTypes,
+  type EventStatus,
+  type ExpenseCategory,
+  type ExpenseDirection,
+  type ParticipantsMode,
+  type RoleType,
+  type SettingKey
+} from "../types/index.js";
 import {
   buildAnnouncementActions,
   buildAnnouncementPanelComponents,
   buildAdminPanelComponents,
   buildEventsOverviewComponents,
+  buildExpenseCategorySelect,
+  buildExpenseDirectionSelect,
   buildExpensePanelComponents,
+  buildHandoverRoleSelect,
   buildMinutesTodoCandidateComponents,
   buildMinutesTodoReviewComponents,
+  buildParticipantsModeSelect,
   buildParticipantsPanelComponents,
   buildRoleTypeSelect,
   buildRoleUserSelect,
@@ -72,7 +87,15 @@ function isEventStatus(value: string): value is EventStatus {
   return (eventStatuses as readonly string[]).includes(value);
 }
 
-function isParticipantsMode(value: string): value is "reaction" | "post" {
+function isExpenseCategory(value: string): value is ExpenseCategory {
+  return (expenseCategories as readonly string[]).includes(value);
+}
+
+function isExpenseDirection(value: string): value is ExpenseDirection {
+  return (expenseDirections as readonly string[]).includes(value);
+}
+
+function isParticipantsMode(value: string): value is ParticipantsMode {
   return value === "reaction" || value === "post";
 }
 
@@ -205,7 +228,11 @@ export function registerInteractionCreateListener(client: Client): void {
           }
 
           if (action === "handover") {
-            await interaction.showModal(buildHandoverModal(threadId));
+            await interaction.reply({
+              content: "どの役割を引き継ぎますか？",
+              components: buildHandoverRoleSelect(threadId),
+              ephemeral: true
+            });
             return;
           }
 
@@ -243,6 +270,14 @@ export function registerInteractionCreateListener(client: Client): void {
               repos.rolesRepo,
               repos.settingsRepo
             ).getPanel(threadId);
+            if (!panel.config) {
+              await interaction.reply({
+                content: "参加者カウント方式を選んでください。",
+                components: buildParticipantsModeSelect(threadId),
+                ephemeral: true
+              });
+              return;
+            }
             await interaction.reply({
               embeds: [buildParticipantsPanelEmbed(event, panel.config, panel.counts)],
               components: buildParticipantsPanelComponents(threadId, panel.config),
@@ -381,7 +416,11 @@ export function registerInteractionCreateListener(client: Client): void {
           );
 
           if (action === "setup") {
-            await interaction.showModal(buildParticipantsSetupModal(threadId));
+            await interaction.reply({
+              content: "参加者カウント方式を選んでください。",
+              components: buildParticipantsModeSelect(threadId),
+              ephemeral: true
+            });
             return;
           }
 
@@ -401,7 +440,11 @@ export function registerInteractionCreateListener(client: Client): void {
 
         if (namespace === "expense") {
           if (action === "new") {
-            await interaction.showModal(buildExpenseCreateModal(threadId));
+            await interaction.reply({
+              content: "出費カテゴリを選んでください。",
+              components: buildExpenseCategorySelect(threadId),
+              ephemeral: true
+            });
             return;
           }
         }
@@ -541,6 +584,45 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
+        if (namespace === "event" && action === "handover-role") {
+          if (!isRoleType(value)) {
+            throw new Error("未知の役割です。");
+          }
+          await interaction.showModal(buildHandoverModal(threadId, value));
+          return;
+        }
+
+        if (namespace === "expense" && action === "new-category") {
+          if (!isExpenseCategory(value)) {
+            throw new Error("未知の出費カテゴリです。");
+          }
+          await interaction.update({
+            content: "出費か補填・返金かを選んでください。",
+            components: buildExpenseDirectionSelect(threadId, value)
+          });
+          return;
+        }
+
+        if (namespace === "expense" && action === "new-direction") {
+          const category = parts[3];
+          if (!category || !isExpenseCategory(category)) {
+            throw new Error("未知の出費カテゴリです。");
+          }
+          if (!isExpenseDirection(value)) {
+            throw new Error("未知の出費方向です。");
+          }
+          await interaction.showModal(buildExpenseCreateModal(threadId, category, value));
+          return;
+        }
+
+        if (namespace === "participants" && action === "mode-select") {
+          if (!isParticipantsMode(value)) {
+            throw new Error("未知の参加者カウント方式です。");
+          }
+          await interaction.showModal(buildParticipantsSetupModal(threadId, value));
+          return;
+        }
+
         if (namespace === "ann" && action === "select") {
           const announcementId = Number(value);
           const announcement = repos.announcementsRepo.get(announcementId);
@@ -673,13 +755,13 @@ export function registerInteractionCreateListener(client: Client): void {
 
         if (namespace === "event" && action === "handover-submit") {
           await interaction.deferReply({ ephemeral: true });
-          const rawRoleType = interaction.fields.getTextInputValue("role_type").trim();
+          const rawRoleType = interaction.customId.split(":")[3];
           const rawUser = interaction.fields.getTextInputValue("new_user").trim();
           const pendingTasks = interaction.fields.getTextInputValue("pending_tasks").trim();
           const reason = interaction.fields.getTextInputValue("reason").trim();
 
-          if (!isRoleType(rawRoleType)) {
-            throw new Error("役割は main / mc / announce / record / prize / support のいずれかです。");
+          if (!rawRoleType || !isRoleType(rawRoleType)) {
+            throw new Error("未知の役割です。");
           }
 
           const newUserId = parseDiscordUserId(rawUser);
@@ -817,16 +899,13 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
-        if (namespace === "participants" && action === "setup-submit") {
+        if (namespace === "participants" && (action === "setup-reaction" || action === "setup-post")) {
           await interaction.deferReply({ ephemeral: true });
-          const modeInput = interaction.fields.getTextInputValue("mode").trim();
+          const modeInput: ParticipantsMode = action === "setup-reaction" ? "reaction" : "post";
           const target = interaction.fields.getTextInputValue("target").trim();
-          const emojis = interaction.fields.getTextInputValue("emojis").trim();
+          const emojis = modeInput === "reaction" ? interaction.fields.getTextInputValue("emojis").trim() : "";
           const deadline = interaction.fields.getTextInputValue("deadline").trim();
 
-          if (!isParticipantsMode(modeInput)) {
-            throw new Error("方式は reaction または post で入力してください。");
-          }
           if (modeInput === "reaction" && !emojis) {
             throw new Error("リアクション方式では絵文字設定が必要です。");
           }
@@ -856,13 +935,19 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
-        if (namespace === "expense" && action === "create-submit") {
+        if (namespace === "expense" && action === "new-submit") {
           await interaction.deferReply({ ephemeral: true });
-          const category = interaction.fields.getTextInputValue("category");
-          const direction = interaction.fields.getTextInputValue("direction");
+          const rawCategory = interaction.customId.split(":")[3];
+          const rawDirection = interaction.customId.split(":")[4];
+          if (!rawCategory || !isExpenseCategory(rawCategory)) {
+            throw new Error("未知の出費カテゴリです。");
+          }
+          if (!rawDirection || !isExpenseDirection(rawDirection)) {
+            throw new Error("未知の出費方向です。");
+          }
           const amount = interaction.fields.getTextInputValue("amount");
           const recipient = interaction.fields.getTextInputValue("recipient");
-          const occurredMemo = interaction.fields.getTextInputValue("occurred_memo");
+          const occurredMemo = interaction.fields.getTextInputValue("occurred_at_and_memo");
           const member = await fetchGuildMember(interaction);
           const repos = createRepos(getDb());
           const service = new ExpenseService(
@@ -874,8 +959,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.settingsRepo
           );
           const expense = await service.create(member, threadId, {
-            category,
-            direction,
+            category: rawCategory,
+            direction: rawDirection,
             amount,
             recipient,
             occurredMemo
