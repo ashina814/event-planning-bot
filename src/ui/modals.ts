@@ -145,29 +145,9 @@ export function buildAdminRolesModal(settings: BotSettings): ModalBuilder {
     );
 }
 
-export function buildAnnouncementCreateModal(threadId: string): ModalBuilder {
+export function buildAnnouncementCustomTimeModal(sessionId: string): ModalBuilder {
   return new ModalBuilder()
-    .setCustomId(`ann:create-submit:${threadId}`)
-    .setTitle("告知文 新規作成")
-    .addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("body")
-          .setLabel("本文")
-          .setPlaceholder("Discord 記法や外部絵文字を含めて、そのまま投稿されます。")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
-          .setMaxLength(4000)
-      )
-    );
-}
-
-export function buildAnnouncementScheduleModal(
-  threadId: string,
-  announcementId: number
-): ModalBuilder {
-  return new ModalBuilder()
-    .setCustomId(`ann:schedule-submit:${threadId}:${announcementId}`)
+    .setCustomId(`ann:custom-time-submit:${sessionId}`)
     .setTitle("告知文 予約投稿")
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(

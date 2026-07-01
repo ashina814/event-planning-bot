@@ -2,15 +2,24 @@ import { type Client, type GuildMember } from "discord.js";
 import type { AnnouncementsRepo } from "../../db/repos/announcements.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
-import { roleLabel } from "../../db/repos/roles.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
 import { isEventLead } from "../../lib/permission.js";
-import { jstDateTimeToUnix, unixNow } from "../../lib/time.js";
+import { unixNow } from "../../lib/time.js";
 import type { AnnouncementRecord, EventRecord, EventRoleRecord } from "../../types/index.js";
 
 export class AnnouncementPermissionError extends Error {
   override name = "AnnouncementPermissionError";
+}
+
+interface ScheduleFromMessageInput {
+  threadId: string;
+  sourceChannelId: string;
+  sourceMessageId: string;
+  sourceAuthorId: string;
+  targetChannelId: string;
+  body: string;
+  scheduledAt: number;
 }
 
 export class AnnouncementService {
@@ -27,21 +36,43 @@ export class AnnouncementService {
     return this.announcementsRepo.listByThread(threadId);
   }
 
-  createDraft(member: GuildMember, threadId: string, body: string): AnnouncementRecord {
-    const event = this.requireEvent(threadId);
-    const roles = this.rolesRepo.list(threadId);
-    this.assertCanEdit(member, event, roles);
+  async scheduleFromMessage(
+    member: GuildMember,
+    input: ScheduleFromMessageInput
+  ): Promise<AnnouncementRecord> {
+    const event = this.requireEvent(input.threadId);
+    const roles = this.rolesRepo.list(input.threadId);
+    this.assertCanRegister(member, event, roles, input.sourceAuthorId);
+    await this.assertCanSendTo(input.targetChannelId);
 
-    const trimmed = body.trim();
-    if (!trimmed) {
+    const body = input.body.trim();
+    if (!body) {
       throw new Error("告知文の本文が空です。");
     }
 
     const now = unixNow();
+    if (input.scheduledAt <= now) {
+      throw new Error("予約日時は現在より後にしてください。");
+    }
+
     const id = this.announcementsRepo.create({
-      threadId,
-      body: trimmed,
+      threadId: input.threadId,
+      body,
+      sourceChannelId: input.sourceChannelId,
+      sourceMessageId: input.sourceMessageId,
+      targetChannelId: input.targetChannelId,
+      scheduledAt: input.scheduledAt,
       createdBy: member.id,
+      now
+    });
+
+    this.jobsRepo.create({
+      kind: "announcement_post",
+      payload: {
+        announcement_id: id,
+        scheduledAt: input.scheduledAt
+      },
+      fireAt: input.scheduledAt,
       now
     });
 
@@ -52,76 +83,88 @@ export class AnnouncementService {
     return created;
   }
 
-  async postNow(member: GuildMember, announcementId: number): Promise<AnnouncementRecord> {
-    this.assertCanPost(member);
-    return this.postAnnouncement(announcementId);
-  }
-
-  schedule(member: GuildMember, announcementId: number, input: string): AnnouncementRecord {
-    this.assertCanPost(member);
+  cancel(member: GuildMember, announcementId: number): AnnouncementRecord {
     const announcement = this.requireAnnouncement(announcementId);
-    const fireAt = jstDateTimeToUnix(input);
-    const now = unixNow();
+    const event = this.requireEvent(announcement.thread_id);
+    const roles = this.rolesRepo.list(announcement.thread_id);
+    this.assertCanRegister(member, event, roles, announcement.created_by);
 
-    if (fireAt <= now) {
-      throw new Error("予約日時は現在より後にしてください。");
+    if (announcement.posted_at) {
+      throw new Error("投稿済みの告知文は取り消せません。");
+    }
+    if (!announcement.scheduled_at) {
+      throw new Error("予約済みの告知文ではありません。");
     }
 
-    this.announcementsRepo.markScheduled(announcement.id, fireAt);
-    this.jobsRepo.create({
-      kind: "announcement_post",
-      payload: {
-        announcementId: announcement.id,
-        channelId: this.settingsRepo.require("eventAnnounce", "公式告知チャンネル"),
-        scheduledAt: fireAt
-      },
-      fireAt,
-      now
-    });
-
+    this.announcementsRepo.cancelScheduled(announcement.id);
     return this.requireAnnouncement(announcement.id);
   }
 
   async postFromJob(
     announcementId: number,
-    channelId: string,
-    expectedScheduledAt: number | null
-  ): Promise<AnnouncementRecord> {
-    const announcement = this.requireAnnouncement(announcementId);
-    if (
-      expectedScheduledAt &&
-      announcement.scheduled_at &&
-      announcement.scheduled_at !== expectedScheduledAt
-    ) {
-      return announcement;
-    }
-
-    return this.postAnnouncement(announcementId, channelId);
-  }
-
-  private async postAnnouncement(
-    announcementId: number,
-    channelId?: string
+    expectedScheduledAt: number | null,
+    fallbackChannelId?: string | null
   ): Promise<AnnouncementRecord> {
     const announcement = this.requireAnnouncement(announcementId);
     if (announcement.posted_msg_id) {
       return announcement;
     }
-
-    const targetChannelId = channelId ?? this.settingsRepo.require("eventAnnounce", "公式告知チャンネル");
-    if (!targetChannelId) {
-      throw new Error("公式告知チャンネルが未設定です。/admin の管理パネルで設定してください。");
+    if (!announcement.scheduled_at) {
+      return announcement;
+    }
+    if (expectedScheduledAt && announcement.scheduled_at !== expectedScheduledAt) {
+      return announcement;
     }
 
-    const channel = await this.client.channels.fetch(targetChannelId);
-    if (!channel || !("send" in channel)) {
-      throw new Error("公式告知チャンネルはテキストチャンネル ID を指定してください。");
+    const content = await this.resolveBody(announcement);
+    if (!content) {
+      throw new Error("告知文の本文が空です。元メッセージまたは予約時の本文を確認してください。");
     }
 
-    const sent = await channel.send({ content: announcement.body });
+    const targetChannelId =
+      announcement.target_channel_id ??
+      fallbackChannelId ??
+      this.settingsRepo.require("eventAnnounce", "公式告知チャンネル");
+    const targetChannel = await this.assertCanSendTo(targetChannelId);
+    const sent = await targetChannel.send({ content });
+
     const now = unixNow();
     this.announcementsRepo.markPosted(announcement.id, sent.id, now);
     return this.requireAnnouncement(announcement.id);
+  }
+
+  private async resolveBody(announcement: AnnouncementRecord): Promise<string> {
+    if (announcement.source_channel_id && announcement.source_message_id) {
+      const currentBody = await this.fetchSourceBody(
+        announcement.source_channel_id,
+        announcement.source_message_id
+      );
+      if (currentBody) {
+        return currentBody;
+      }
+    }
+    return announcement.body.trim();
+  }
+
+  private async fetchSourceBody(channelId: string, messageId: string): Promise<string | null> {
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !("messages" in channel)) {
+        return null;
+      }
+      const message = await channel.messages.fetch(messageId);
+      return message.content.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async assertCanSendTo(channelId: string) {
+    const channel = await this.client.channels.fetch(channelId);
+    if (!channel || !("send" in channel)) {
+      throw new Error("投稿先はテキストチャンネルを選んでください。");
+    }
+    return channel;
   }
 
   private requireEvent(threadId: string): EventRecord {
@@ -140,30 +183,21 @@ export class AnnouncementService {
     return announcement;
   }
 
-  private assertCanEdit(
+  private assertCanRegister(
     member: GuildMember,
     _event: EventRecord,
-    roles: EventRoleRecord[]
+    roles: EventRoleRecord[],
+    sourceAuthorId: string
   ): void {
-    if (isEventLead(member, this.settingsRepo)) {
+    if (member.id === sourceAuthorId || isEventLead(member, this.settingsRepo)) {
       return;
     }
 
-    const canEdit = roles.some(
-      (role) =>
-        ((role.role_kind === "main" || role.role_type === "main") ||
-          role.role_type === "announce" ||
-          roleLabel(role).includes("告知")) &&
-        role.user_id === member.id
+    const isMain = roles.some(
+      (role) => (role.role_kind === "main" || role.role_type === "main") && role.user_id === member.id
     );
-    if (!canEdit) {
-      throw new AnnouncementPermissionError("告知文の作成は主担当・告知担当・イベント統括のみ可能です。");
-    }
-  }
-
-  private assertCanPost(member: GuildMember): void {
-    if (!isEventLead(member, this.settingsRepo)) {
-      throw new AnnouncementPermissionError("公式告知チャンネルへの転送・予約はイベント統括のみ可能です。");
+    if (!isMain) {
+      throw new AnnouncementPermissionError("告知文の予約は、投稿者本人・主担当・イベント統括のみ可能です。");
     }
   }
 }

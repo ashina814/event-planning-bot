@@ -149,6 +149,9 @@ export interface AnnouncementRecord {
   id: number;
   thread_id: string;
   body: string;
+  source_channel_id: string | null;
+  source_message_id: string | null;
+  target_channel_id: string | null;
   created_by: string;
   created_at: number;
   posted_msg_id: string | null;

@@ -1,6 +1,18 @@
 import { Events, type Client, type Interaction } from "discord.js";
 import { commandMap } from "../commands/index.js";
 import {
+  announcementMessageLink,
+  buildSchedulePrompt,
+  buildTargetChannelPrompt,
+  discardAnnouncementDraftSession,
+  handleRegisterAnnouncementCommand,
+  REGISTER_ANNOUNCEMENT_COMMAND_JA_NAME,
+  REGISTER_ANNOUNCEMENT_COMMAND_NAME,
+  requireAnnouncementDraftSession,
+  setAnnouncementDraftEvent,
+  setAnnouncementDraftTargetChannel
+} from "../commands/register-announcement.js";
+import {
   handleSetParticipantsTargetCommand,
   SET_PARTICIPANTS_TARGET_COMMAND_JA_NAME,
   SET_PARTICIPANTS_TARGET_COMMAND_NAME
@@ -25,13 +37,14 @@ import { TodoService } from "../features/todo/service.js";
 import { TimekeeperService } from "../features/timekeeper/service.js";
 import { fetchGuildMember, PermissionError } from "../lib/permission.js";
 import { parseDiscordUserId } from "../lib/parser.js";
-import { formatJstDateTime } from "../lib/time.js";
+import { formatJstDateTime, jstDateTimeToUnix, unixNow } from "../lib/time.js";
 import { logger } from "../lib/logger.js";
 import {
   eventStatuses,
   expenseCategories,
   expenseDirections,
   roleTypes,
+  type AnnouncementRecord,
   type EventStatus,
   type ExpenseCategory,
   type ExpenseDirection,
@@ -39,8 +52,9 @@ import {
   type SettingKey
 } from "../types/index.js";
 import {
-  buildAnnouncementActions,
   buildAnnouncementPanelComponents,
+  buildAnnouncementSchedulePresetComponents,
+  buildAnnouncementTargetChannelSelect,
   buildAdminPanelComponents,
   buildEventsOverviewComponents,
   buildExpenseCategorySelect,
@@ -64,8 +78,6 @@ import {
   buildTodoPanelComponents
 } from "../ui/buttons.js";
 import {
-  buildAnnouncementPanelEmbed,
-  buildAnnouncementPreviewEmbed,
   buildAdminPanelEmbed,
   buildEventsCalendarEmbed,
   buildEventsStatsEmbed,
@@ -80,8 +92,7 @@ import {
   buildTimerPanelEmbed
 } from "../ui/embeds.js";
 import {
-  buildAnnouncementCreateModal,
-  buildAnnouncementScheduleModal,
+  buildAnnouncementCustomTimeModal,
   buildAdminBaseModal,
   buildAdminChannels1Modal,
   buildAdminChannels2Modal,
@@ -122,6 +133,59 @@ function assertOwner(userId: string): void {
   }
 }
 
+function buildAnnouncementPanelContent(
+  eventTitle: string,
+  announcements: AnnouncementRecord[],
+  guildId: string | null | undefined
+): string {
+  const scheduled = announcements.filter((announcement) => announcement.scheduled_at && !announcement.posted_at);
+  const scheduledLines =
+    scheduled.length > 0
+      ? scheduled
+          .slice(0, 8)
+          .map((announcement) => {
+            const target = announcement.target_channel_id ? `<#${announcement.target_channel_id}>` : "投稿先未設定";
+            const source = announcementMessageLink(
+              guildId,
+              announcement.source_channel_id,
+              announcement.source_message_id
+            );
+            return [
+              `• ${formatJstDateTime(announcement.scheduled_at ?? 0)} → ${target}`,
+              `  元メッセージ: ${source}`
+            ].join("\n");
+          })
+          .concat(scheduled.length > 8 ? [`ほか ${scheduled.length - 8} 件`] : [])
+          .join("\n")
+      : "まだ予約されていません。";
+
+  return [
+    `📢 **告知文の予約: ${eventTitle}**`,
+    "",
+    scheduledLines,
+    "",
+    "使い方",
+    "1. このイベントスレッドに告知文を普通に投稿します。",
+    "2. その投稿を右クリック → アプリ → 告知文として予約。",
+    "3. 投稿先チャンネルと日時を選ぶと予約完了です。",
+    "",
+    "予約後に元メッセージを編集すると、投稿時には編集後の本文を使います。"
+  ].join("\n");
+}
+
+function announcementPresetUnix(preset: string): number {
+  switch (preset) {
+    case "now":
+      return unixNow() + 30;
+    case "1h":
+      return unixNow() + 60 * 60;
+    case "21":
+      return jstDateTimeToUnix("21:00");
+    default:
+      throw new Error("未知の予約プリセットです。");
+  }
+}
+
 async function replyError(interaction: Interaction, error: unknown): Promise<void> {
   const message =
     error instanceof PermissionError
@@ -156,10 +220,19 @@ export function registerInteractionCreateListener(client: Client): void {
 
       if (interaction.isMessageContextMenuCommand()) {
         if (
+          interaction.commandName === REGISTER_ANNOUNCEMENT_COMMAND_NAME ||
+          interaction.commandName === REGISTER_ANNOUNCEMENT_COMMAND_JA_NAME
+        ) {
+          await handleRegisterAnnouncementCommand(interaction);
+          return;
+        }
+
+        if (
           interaction.commandName === SET_PARTICIPANTS_TARGET_COMMAND_NAME ||
           interaction.commandName === SET_PARTICIPANTS_TARGET_COMMAND_JA_NAME
         ) {
           await handleSetParticipantsTargetCommand(interaction);
+          return;
         }
         return;
       }
@@ -367,7 +440,7 @@ export function registerInteractionCreateListener(client: Client): void {
           if (action === "announcements") {
             const announcements = repos.announcementsRepo.listByThread(threadId);
             await interaction.reply({
-              embeds: [buildAnnouncementPanelEmbed(event, announcements)],
+              content: buildAnnouncementPanelContent(event.title, announcements, interaction.guildId),
               components: buildAnnouncementPanelComponents(threadId, announcements),
               ephemeral: true
             });
@@ -450,49 +523,43 @@ export function registerInteractionCreateListener(client: Client): void {
         }
 
         if (namespace === "ann") {
-          const announcementId = Number(interaction.customId.split(":")[3] ?? 0);
-          const service = new AnnouncementService(
-            interaction.client,
-            repos.announcementsRepo,
-            repos.eventsRepo,
-            repos.rolesRepo,
-            repos.jobsRepo,
-            repos.settingsRepo
-          );
-
-          if (action === "new") {
-            await interaction.showModal(buildAnnouncementCreateModal(threadId));
+          if (action === "custom-time") {
+            requireAnnouncementDraftSession(threadId, interaction.user.id);
+            await interaction.showModal(buildAnnouncementCustomTimeModal(threadId));
             return;
           }
 
-          if (!announcementId) {
-            throw new Error("告知文 ID が不正です。");
-          }
-
-          if (action === "preview") {
-            const announcement = repos.announcementsRepo.get(announcementId);
-            if (!announcement) {
-              throw new Error("告知文が DB に見つかりません。");
+          if (action === "preset") {
+            const preset = parts[3];
+            const session = requireAnnouncementDraftSession(threadId, interaction.user.id);
+            if (!session.threadId || !session.targetChannelId) {
+              throw new Error("予約するイベントまたは投稿先チャンネルが未選択です。");
             }
-            await interaction.reply({
-              embeds: [buildAnnouncementPreviewEmbed(announcement)],
-              ephemeral: true
-            });
-            return;
-          }
-
-          if (action === "post") {
-            await interaction.deferReply({ ephemeral: true });
+            const scheduledAt = announcementPresetUnix(preset ?? "");
+            await interaction.deferUpdate();
             const member = await fetchGuildMember(interaction);
-            const posted = await service.postNow(member, announcementId);
-            await interaction.editReply({
-              content: `公式告知チャンネルへ転送しました。message_id=${posted.posted_msg_id}`
+            const service = new AnnouncementService(
+              interaction.client,
+              repos.announcementsRepo,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.jobsRepo,
+              repos.settingsRepo
+            );
+            const announcement = await service.scheduleFromMessage(member, {
+              threadId: session.threadId,
+              sourceChannelId: session.sourceChannelId,
+              sourceMessageId: session.sourceMessageId,
+              sourceAuthorId: session.sourceAuthorId,
+              targetChannelId: session.targetChannelId,
+              body: session.body,
+              scheduledAt
             });
-            return;
-          }
-
-          if (action === "schedule") {
-            await interaction.showModal(buildAnnouncementScheduleModal(threadId, announcementId));
+            discardAnnouncementDraftSession(threadId);
+            await interaction.editReply({
+              content: `予約完了。${formatJstDateTime(announcement.scheduled_at ?? scheduledAt)} に <#${announcement.target_channel_id}> へ投稿します。`,
+              components: []
+            });
             return;
           }
         }
@@ -857,15 +924,39 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
-        if (namespace === "ann" && action === "select") {
-          const announcementId = Number(value);
-          const announcement = repos.announcementsRepo.get(announcementId);
-          if (!announcement) {
-            throw new Error("告知文が DB に見つかりません。");
+        if (namespace === "ann" && action === "target-event") {
+          const event = repos.eventsRepo.get(value);
+          if (!event) {
+            throw new Error("イベントが見つかりませんでした");
           }
+          setAnnouncementDraftEvent(threadId, interaction.user.id, value);
           await interaction.update({
-            embeds: [buildAnnouncementPreviewEmbed(announcement)],
-            components: buildAnnouncementActions(threadId, announcement.id, Boolean(announcement.posted_at))
+            content: buildTargetChannelPrompt(event, repos),
+            components: buildAnnouncementTargetChannelSelect(threadId)
+          });
+          return;
+        }
+
+        if (namespace === "ann" && action === "cancel-select") {
+          const announcementId = Number(value);
+          await interaction.deferUpdate();
+          const member = await fetchGuildMember(interaction);
+          const service = new AnnouncementService(
+            interaction.client,
+            repos.announcementsRepo,
+            repos.eventsRepo,
+            repos.rolesRepo,
+            repos.jobsRepo,
+            repos.settingsRepo
+          );
+          service.cancel(member, announcementId);
+          const event = repos.eventsRepo.get(threadId);
+          const announcements = repos.announcementsRepo.listByThread(threadId);
+          await interaction.editReply({
+            content: event
+              ? `予約を取り消しました。\n\n${buildAnnouncementPanelContent(event.title, announcements, interaction.guildId)}`
+              : "予約を取り消しました。",
+            components: event ? buildAnnouncementPanelComponents(threadId, announcements) : []
           });
           return;
         }
@@ -982,11 +1073,24 @@ export function registerInteractionCreateListener(client: Client): void {
 
       if (interaction.isChannelSelectMenu()) {
         const [namespace, action, threadId] = interaction.customId.split(":");
-        if (namespace !== "participants" || action !== "setup-post-channel" || !threadId) {
+        if (!threadId) {
           return;
         }
         const channelId = interaction.values[0];
         if (!channelId) {
+          return;
+        }
+
+        if (namespace === "ann" && action === "target-channel") {
+          setAnnouncementDraftTargetChannel(threadId, interaction.user.id, channelId);
+          await interaction.update({
+            content: buildSchedulePrompt(channelId),
+            components: buildAnnouncementSchedulePresetComponents(threadId)
+          });
+          return;
+        }
+
+        if (namespace !== "participants" || action !== "setup-post-channel") {
           return;
         }
 
@@ -1113,32 +1217,11 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
-        if (namespace === "ann" && action === "create-submit") {
+        if (namespace === "ann" && action === "custom-time-submit") {
           await interaction.deferReply({ ephemeral: true });
-          const body = interaction.fields.getTextInputValue("body");
-          const member = await fetchGuildMember(interaction);
-          const repos = createRepos(getDb());
-          const service = new AnnouncementService(
-            interaction.client,
-            repos.announcementsRepo,
-            repos.eventsRepo,
-            repos.rolesRepo,
-            repos.jobsRepo,
-            repos.settingsRepo
-          );
-          const announcement = service.createDraft(member, threadId, body);
-          await interaction.editReply({
-            embeds: [buildAnnouncementPreviewEmbed(announcement)],
-            components: buildAnnouncementActions(threadId, announcement.id, false)
-          });
-          return;
-        }
-
-        if (namespace === "ann" && action === "schedule-submit") {
-          await interaction.deferReply({ ephemeral: true });
-          const announcementId = Number(interaction.customId.split(":")[3] ?? 0);
-          if (!announcementId) {
-            throw new Error("告知文 ID が不正です。");
+          const session = requireAnnouncementDraftSession(threadId, interaction.user.id);
+          if (!session.threadId || !session.targetChannelId) {
+            throw new Error("予約するイベントまたは投稿先チャンネルが未選択です。");
           }
           const scheduledAt = interaction.fields.getTextInputValue("scheduled_at");
           const member = await fetchGuildMember(interaction);
@@ -1151,10 +1234,19 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.jobsRepo,
             repos.settingsRepo
           );
-          const announcement = service.schedule(member, announcementId, scheduledAt);
+          const scheduledUnix = jstDateTimeToUnix(scheduledAt);
+          const announcement = await service.scheduleFromMessage(member, {
+            threadId: session.threadId,
+            sourceChannelId: session.sourceChannelId,
+            sourceMessageId: session.sourceMessageId,
+            sourceAuthorId: session.sourceAuthorId,
+            targetChannelId: session.targetChannelId,
+            body: session.body,
+            scheduledAt: scheduledUnix
+          });
+          discardAnnouncementDraftSession(threadId);
           await interaction.editReply({
-            embeds: [buildAnnouncementPreviewEmbed(announcement)],
-            content: "告知文を予約しました。"
+            content: `予約完了。${formatJstDateTime(announcement.scheduled_at ?? scheduledUnix)} に <#${announcement.target_channel_id}> へ投稿します。`
           });
           return;
         }

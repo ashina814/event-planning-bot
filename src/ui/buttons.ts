@@ -315,65 +315,93 @@ export function buildRoleDeleteConfirm(
 export function buildAnnouncementPanelComponents(
   threadId: string,
   announcements: AnnouncementRecord[]
-): Array<ActionRowBuilder<ButtonBuilder> | ActionRowBuilder<StringSelectMenuBuilder>> {
-  const rows: Array<ActionRowBuilder<ButtonBuilder> | ActionRowBuilder<StringSelectMenuBuilder>> = [
-    new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`ann:new:${threadId}`)
-        .setEmoji("➕")
-        .setLabel("新規作成")
-        .setStyle(ButtonStyle.Primary)
-    )
-  ];
+): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  const scheduled = announcements.filter((announcement) => announcement.scheduled_at && !announcement.posted_at);
 
-  if (announcements.length > 0) {
-    rows.push(
-      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`ann:select:${threadId}`)
-          .setPlaceholder("操作する告知文")
-          .addOptions(
-            announcements.slice(0, 25).map((announcement, index) => ({
-              label: announcement.posted_at
-                ? `v${announcements.length - index} 転送済`
-                : announcement.scheduled_at
-                  ? `v${announcements.length - index} 予約済`
-                  : `v${announcements.length - index} 下書き`,
-              value: String(announcement.id),
-              description: announcement.body.replace(/\s+/g, " ").trim().slice(0, 80) || "(本文なし)"
-            }))
-          )
-      )
-    );
+  if (scheduled.length === 0) {
+    return [];
   }
 
-  return rows;
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`ann:cancel-select:${threadId}`)
+        .setPlaceholder("取り消す予約を選択")
+        .addOptions(
+          scheduled.slice(0, 25).map((announcement) => ({
+            label: `予約 ${formatJstDateTime(announcement.scheduled_at ?? 0)}`.slice(0, 100),
+            value: String(announcement.id),
+            description: selectText(announcement.body, 80)
+          }))
+        )
+    )
+  ];
 }
 
-export function buildAnnouncementActions(
-  threadId: string,
-  announcementId: number,
-  posted: boolean
-): ActionRowBuilder<ButtonBuilder>[] {
+export function buildAnnouncementTargetEventSelect(
+  sessionId: string,
+  events: EventRecord[]
+): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`ann:target-event:${sessionId}`)
+        .setPlaceholder("紐付けるイベントを選択")
+        .addOptions(
+          events.slice(0, 25).map((event) => ({
+            label: selectText(event.title, 90),
+            value: event.thread_id,
+            description: selectText(
+              `${statusLabels[event.status]} / ${event.scheduled_at ? formatJstDateTime(event.scheduled_at) : "開催日時未定"}`,
+              100
+            )
+          }))
+        )
+    )
+  ];
+}
+
+export function buildAnnouncementTargetChannelSelect(sessionId: string): ActionRowBuilder<ChannelSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+      new ChannelSelectMenuBuilder()
+        .setCustomId(`ann:target-channel:${sessionId}`)
+        .setPlaceholder("投稿先チャンネルを選択")
+        .setChannelTypes(
+          ChannelType.GuildText,
+          ChannelType.GuildAnnouncement,
+          ChannelType.PublicThread,
+          ChannelType.PrivateThread
+        )
+        .setMinValues(1)
+        .setMaxValues(1)
+    )
+  ];
+}
+
+export function buildAnnouncementSchedulePresetComponents(sessionId: string): ActionRowBuilder<ButtonBuilder>[] {
   return [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(`ann:preview:${threadId}:${announcementId}`)
-        .setEmoji("👁️")
-        .setLabel("プレビュー")
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`ann:post:${threadId}:${announcementId}`)
-        .setEmoji("📣")
-        .setLabel("今すぐ転送")
+        .setCustomId(`ann:preset:${sessionId}:now`)
+        .setLabel("今すぐ")
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(posted),
+        .setEmoji("📣"),
       new ButtonBuilder()
-        .setCustomId(`ann:schedule:${threadId}:${announcementId}`)
-        .setEmoji("⏱️")
-        .setLabel("予約")
+        .setCustomId(`ann:preset:${sessionId}:1h`)
+        .setLabel("1時間後")
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(posted)
+        .setEmoji("⏱️"),
+      new ButtonBuilder()
+        .setCustomId(`ann:preset:${sessionId}:21`)
+        .setLabel("今夜21時")
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji("🌙"),
+      new ButtonBuilder()
+        .setCustomId(`ann:custom-time:${sessionId}`)
+        .setLabel("日時指定")
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji("📅")
     )
   ];
 }

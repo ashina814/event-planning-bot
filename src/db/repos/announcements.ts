@@ -4,6 +4,10 @@ import type { AnnouncementRecord } from "../../types/index.js";
 interface CreateAnnouncementInput {
   threadId: string;
   body: string;
+  sourceChannelId?: string | null;
+  sourceMessageId?: string | null;
+  targetChannelId?: string | null;
+  scheduledAt?: number | null;
   createdBy: string;
   now: number;
 }
@@ -15,10 +19,20 @@ export class AnnouncementsRepo {
     const result = this.db
       .prepare(
         `INSERT INTO announcements (
-          thread_id, body, created_by, created_at, posted_msg_id, posted_at, scheduled_at
-        ) VALUES (?, ?, ?, ?, NULL, NULL, NULL)`
+          thread_id, body, source_channel_id, source_message_id, target_channel_id,
+          created_by, created_at, posted_msg_id, posted_at, scheduled_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
       )
-      .run(input.threadId, input.body, input.createdBy, input.now);
+      .run(
+        input.threadId,
+        input.body,
+        input.sourceChannelId ?? null,
+        input.sourceMessageId ?? null,
+        input.targetChannelId ?? null,
+        input.createdBy,
+        input.now,
+        input.scheduledAt ?? null
+      );
 
     return Number(result.lastInsertRowid);
   }
@@ -69,5 +83,11 @@ export class AnnouncementsRepo {
     this.db
       .prepare("UPDATE announcements SET scheduled_at = ? WHERE id = ?")
       .run(scheduledAt, id);
+  }
+
+  cancelScheduled(id: number): void {
+    this.db
+      .prepare("UPDATE announcements SET scheduled_at = NULL WHERE id = ? AND posted_at IS NULL")
+      .run(id);
   }
 }

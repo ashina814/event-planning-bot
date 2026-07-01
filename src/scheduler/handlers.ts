@@ -51,8 +51,8 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
       return;
     }
     case "announcement_post": {
-      const announcementId = Number(payload.announcementId ?? 0);
-      const channelId = String(payload.channelId ?? "");
+      const announcementId = Number(payload.announcementId ?? payload.announcement_id ?? 0);
+      const channelId = payload.channelId ? String(payload.channelId) : null;
       const scheduledAt = payload.scheduledAt ? Number(payload.scheduledAt) : null;
       if (!announcementId) {
         throw new Error("announcement_post payload.announcementId is required");
@@ -65,7 +65,7 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.jobsRepo,
         deps.settingsRepo
       );
-      await service.postFromJob(announcementId, channelId, scheduledAt);
+      await service.postFromJob(announcementId, scheduledAt, channelId);
       return;
     }
     case "timer_section_prenotice":

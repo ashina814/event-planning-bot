@@ -75,6 +75,11 @@ function runMigrations(db: Database.Database): void {
       continue;
     }
 
+    if (name === "002_announcement_sources.sql" && hasColumn(db, "announcements", "source_channel_id")) {
+      markMigrationApplied(db, name);
+      continue;
+    }
+
     const sql = readFileSync(resolve(migrationsDir, name), "utf8");
     const tx = db.transaction(() => {
       db.exec(sql);
