@@ -4,7 +4,7 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from "discord.js";
-import type { BotSettings, ExpenseCategory, ExpenseDirection, ParticipantsMode, TodoRecord } from "../types/index.js";
+import type { BotSettings, ExpenseCategory, ExpenseDirection, TodoRecord } from "../types/index.js";
 
 export function buildHandoverModal(threadId: string, roleType: string): ModalBuilder {
   return new ModalBuilder()
@@ -220,60 +220,6 @@ export function buildTimerSetupModal(threadId: string): ModalBuilder {
           .setMaxLength(2000)
       )
     );
-}
-
-export function buildParticipantsSetupModal(threadId: string, mode: ParticipantsMode): ModalBuilder {
-  const modal = new ModalBuilder()
-    .setCustomId(`participants:setup-${mode}:${threadId}`)
-    .setTitle(`参加者カウント設定`);
-
-  if (mode === "reaction") {
-    return modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("target")
-          .setLabel("対象")
-          .setPlaceholder("DiscordメッセージURL または メッセージID")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("emojis")
-          .setLabel("絵文字設定")
-          .setPlaceholder("reactionのみ 例: ⭕:参加,✨:興味,❌:不参加")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("deadline")
-          .setLabel("締切")
-          .setPlaceholder("空なら開催日時。例: 明日 22:00 / 6/29 22:00")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-      )
-    );
-  }
-
-  return modal.addComponents(
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId("target")
-        .setLabel("対象チャンネル/スレッド")
-        .setPlaceholder("チャンネルID または スレッドID")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-    ),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId("deadline")
-        .setLabel("締切")
-        .setPlaceholder("空なら開催日時。例: 明日 22:00 / 6/29 22:00")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false)
-    )
-  );
 }
 
 export function buildTodoAddModal(threadId: string): ModalBuilder {

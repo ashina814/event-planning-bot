@@ -2,6 +2,8 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelSelectMenuBuilder,
+  ChannelType,
   StringSelectMenuBuilder,
   UserSelectMenuBuilder
 } from "discord.js";
@@ -12,7 +14,6 @@ import {
   type AnnouncementRecord,
   type EventRecord,
   type EventStatus,
-  type ParticipantsMode,
   type RoleSlot,
   type RoleType,
   type TodoRecord
@@ -22,7 +23,6 @@ import type { TimerScheduleRecord } from "../types/index.js";
 import {
   expenseCategoryLabels,
   expenseDirectionLabels,
-  participantsModeLabels,
   roleLabels,
   statusLabels
 } from "./labels.js";
@@ -432,19 +432,26 @@ export function buildParticipantsPanelComponents(
   ];
 }
 
-export function buildParticipantsModeSelect(threadId: string): ActionRowBuilder<StringSelectMenuBuilder>[] {
-  const modes: ParticipantsMode[] = ["reaction", "post"];
+export function buildParticipantsSetupGuideComponents(threadId: string): ActionRowBuilder<ButtonBuilder>[] {
   return [
-    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId(`participants:mode-select:${threadId}`)
-        .setPlaceholder("参加者カウント方式を選択")
-        .addOptions(
-          modes.map((mode) => ({
-            label: participantsModeLabels[mode] ?? mode,
-            value: mode
-          }))
-        )
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`participants:setup-post:${threadId}`)
+        .setLabel("投稿方式に切り替え")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildParticipantsPostChannelSelect(threadId: string): ActionRowBuilder<ChannelSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+      new ChannelSelectMenuBuilder()
+        .setCustomId(`participants:setup-post-channel:${threadId}`)
+        .setPlaceholder("投稿数を数えるチャンネル/スレッドを選択")
+        .setChannelTypes(ChannelType.GuildText, ChannelType.PublicThread, ChannelType.PrivateThread)
+        .setMinValues(1)
+        .setMaxValues(1)
     )
   ];
 }

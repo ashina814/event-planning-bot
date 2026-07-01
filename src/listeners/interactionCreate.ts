@@ -1,7 +1,6 @@
 import { Events, type Client, type Interaction } from "discord.js";
 import { commandMap } from "../commands/index.js";
 import {
-  buildParticipantsTargetEmojisModal,
   handleSetParticipantsTargetCommand,
   SET_PARTICIPANTS_TARGET_COMMAND_JA_NAME,
   SET_PARTICIPANTS_TARGET_COMMAND_NAME
@@ -36,7 +35,6 @@ import {
   type EventStatus,
   type ExpenseCategory,
   type ExpenseDirection,
-  type ParticipantsMode,
   type RoleType,
   type SettingKey
 } from "../types/index.js";
@@ -51,7 +49,8 @@ import {
   buildHandoverRoleSelect,
   buildMinutesTodoCandidateComponents,
   buildMinutesTodoReviewComponents,
-  buildParticipantsModeSelect,
+  buildParticipantsPostChannelSelect,
+  buildParticipantsSetupGuideComponents,
   buildRoleAssignUserSelect,
   buildRoleDeleteConfirm,
   buildRoleHandoverSelect,
@@ -91,7 +90,6 @@ import {
   buildExpenseCreateModal,
   buildHandoverModal,
   buildMinutesTodoAdoptModal,
-  buildParticipantsSetupModal,
   buildRoleAddModal,
   buildTodoAddModal,
   buildTimerSetupModal
@@ -112,10 +110,6 @@ function isExpenseCategory(value: string): value is ExpenseCategory {
 
 function isExpenseDirection(value: string): value is ExpenseDirection {
   return (expenseDirections as readonly string[]).includes(value);
-}
-
-function isParticipantsMode(value: string): value is ParticipantsMode {
-  return value === "reaction" || value === "post";
 }
 
 function isHelpTopic(value: string): value is HelpTopic {
@@ -401,8 +395,11 @@ export function registerInteractionCreateListener(client: Client): void {
             ).getPanel(threadId);
             if (!panel.config) {
               await interaction.reply({
-                content: "参加者カウント方式を選んでください。リアクション方式はメッセージを右クリック→アプリからも設定できます。",
-                components: buildParticipantsModeSelect(threadId),
+                content: [
+                  "リアクション方式は、対象メッセージを右クリック → アプリ → 参加者カウント対象に設定 から指定してください。",
+                  "投稿方式にする場合は下のボタンからチャンネル/スレッドを選べます。"
+                ].join("\n"),
+                components: buildParticipantsSetupGuideComponents(threadId),
                 ephemeral: true
               });
               return;
@@ -550,16 +547,63 @@ export function registerInteractionCreateListener(client: Client): void {
             if (!targetChannel || !targetMsg) {
               throw new Error("対象メッセージ情報が不完全です。");
             }
-            await interaction.showModal(buildParticipantsTargetEmojisModal(threadId, targetChannel, targetMsg));
+            await interaction.deferReply({ ephemeral: true });
+            const member = await fetchGuildMember(interaction);
+            const setupMessage = await service.beginReactionEmojiSetup(member, threadId, targetChannel, targetMsg);
+            await interaction.editReply({
+              content: `セットアップメッセージを投稿しました: ${setupMessage.url}`
+            });
             return;
           }
 
           if (action === "setup") {
             await interaction.reply({
-              content: "参加者カウント方式を選んでください。リアクション方式はメッセージを右クリック→アプリからも設定できます。",
-              components: buildParticipantsModeSelect(threadId),
+              content: [
+                "リアクション方式は、対象メッセージを右クリック → アプリ → 参加者カウント対象に設定 から指定してください。",
+                "投稿方式にする場合は下のボタンからチャンネル/スレッドを選べます。"
+              ].join("\n"),
+              components: buildParticipantsSetupGuideComponents(threadId),
               ephemeral: true
             });
+            return;
+          }
+
+          if (action === "setup-post") {
+            await interaction.update({
+              content: "投稿数を数えるチャンネル/スレッドを選んでください。",
+              embeds: [],
+              components: buildParticipantsPostChannelSelect(threadId)
+            });
+            return;
+          }
+
+          if (action === "setup-confirm") {
+            const setupMsg = parts[3];
+            if (!setupMsg) {
+              throw new Error("セットアップ情報が見つかりませんでした。");
+            }
+            await interaction.deferReply({ ephemeral: true });
+            const member = await fetchGuildMember(interaction);
+            await service.confirmReactionEmojiSetup(member, threadId, setupMsg);
+            const event = repos.eventsRepo.get(threadId);
+            const panel = service.getPanel(threadId);
+            await interaction.editReply({
+              content: "設定完了。対象メッセージのリアクションをカウントし始めます。",
+              embeds: event ? [buildParticipantsPanelEmbed(event, panel.config, panel.counts)] : [],
+              components: buildParticipantsPanelComponents(threadId, panel.config)
+            });
+            return;
+          }
+
+          if (action === "setup-cancel") {
+            const setupMsg = parts[3];
+            if (!setupMsg) {
+              return;
+            }
+            await interaction.deferReply({ ephemeral: true });
+            const member = await fetchGuildMember(interaction);
+            await service.cancelReactionEmojiSetup(member, threadId, setupMsg);
+            await interaction.editReply({ content: "参加者カウントのセットアップをキャンセルしました。" });
             return;
           }
 
@@ -791,21 +835,25 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
-        if (namespace === "participants" && action === "mode-select") {
-          if (!isParticipantsMode(value)) {
-            throw new Error("未知の参加者カウント方式です。");
-          }
-          await interaction.showModal(buildParticipantsSetupModal(threadId, value));
-          return;
-        }
-
         if (namespace === "participants" && action === "target-event") {
           const targetChannel = threadId;
           const targetMsg = parts[3];
           if (!targetMsg) {
             throw new Error("対象メッセージ情報が不完全です。");
           }
-          await interaction.showModal(buildParticipantsTargetEmojisModal(value, targetChannel, targetMsg));
+          await interaction.deferReply({ ephemeral: true });
+          const member = await fetchGuildMember(interaction);
+          const service = new ParticipantsService(
+            interaction.client,
+            repos.participantsRepo,
+            repos.eventsRepo,
+            repos.rolesRepo,
+            repos.settingsRepo
+          );
+          const setupMessage = await service.beginReactionEmojiSetup(member, value, targetChannel, targetMsg);
+          await interaction.editReply({
+            content: `セットアップメッセージを投稿しました: ${setupMessage.url}`
+          });
           return;
         }
 
@@ -928,6 +976,37 @@ export function registerInteractionCreateListener(client: Client): void {
         await interaction.followUp({
           content: `${roleLabels[roleType]} を <@${userId}> に設定しました。`,
           ephemeral: true
+        });
+        return;
+      }
+
+      if (interaction.isChannelSelectMenu()) {
+        const [namespace, action, threadId] = interaction.customId.split(":");
+        if (namespace !== "participants" || action !== "setup-post-channel" || !threadId) {
+          return;
+        }
+        const channelId = interaction.values[0];
+        if (!channelId) {
+          return;
+        }
+
+        await interaction.deferUpdate();
+        const member = await fetchGuildMember(interaction);
+        const repos = createRepos(getDb());
+        const service = new ParticipantsService(
+          interaction.client,
+          repos.participantsRepo,
+          repos.eventsRepo,
+          repos.rolesRepo,
+          repos.settingsRepo
+        );
+        await service.setupPostChannel(member, threadId, channelId);
+        const event = repos.eventsRepo.get(threadId);
+        const panel = service.getPanel(threadId);
+        await interaction.editReply({
+          content: "設定完了。投稿数を参加者数としてカウントします。",
+          embeds: event ? [buildParticipantsPanelEmbed(event, panel.config, panel.counts)] : [],
+          components: buildParticipantsPanelComponents(threadId, panel.config)
         });
         return;
       }
@@ -1124,71 +1203,6 @@ export function registerInteractionCreateListener(client: Client): void {
             content: "タイマーを設定しました。",
             embeds: event ? [buildTimerPanelEmbed(event, schedule, sections)] : [],
             components: buildTimerPanelComponents(threadId, schedule)
-          });
-          return;
-        }
-
-        if (namespace === "participants" && (action === "setup-reaction" || action === "setup-post")) {
-          await interaction.deferReply({ ephemeral: true });
-          const modeInput: ParticipantsMode = action === "setup-reaction" ? "reaction" : "post";
-          const target = interaction.fields.getTextInputValue("target").trim();
-          const emojis = modeInput === "reaction" ? interaction.fields.getTextInputValue("emojis").trim() : "";
-          const deadline = interaction.fields.getTextInputValue("deadline").trim();
-
-          if (modeInput === "reaction" && !emojis) {
-            throw new Error("リアクション方式では絵文字設定が必要です。");
-          }
-
-          const member = await fetchGuildMember(interaction);
-          const repos = createRepos(getDb());
-          const service = new ParticipantsService(
-            interaction.client,
-            repos.participantsRepo,
-            repos.eventsRepo,
-            repos.rolesRepo,
-            repos.settingsRepo
-          );
-          await service.setup(member, threadId, {
-            mode: modeInput,
-            target,
-            emojis,
-            deadline
-          });
-          const event = repos.eventsRepo.get(threadId);
-          const panel = service.getPanel(threadId);
-          await interaction.editReply({
-            content: "参加者カウントを設定しました。",
-            embeds: event ? [buildParticipantsPanelEmbed(event, panel.config, panel.counts)] : [],
-            components: buildParticipantsPanelComponents(threadId, panel.config)
-          });
-          return;
-        }
-
-        if (namespace === "participants" && action === "target-emojis") {
-          await interaction.deferReply({ ephemeral: true });
-          const targetChannel = parts[3];
-          const targetMsg = parts[4];
-          if (!targetChannel || !targetMsg) {
-            throw new Error("対象メッセージ情報が不完全です。");
-          }
-          const emojis = interaction.fields.getTextInputValue("emojis").trim();
-          const deadline = interaction.fields.getTextInputValue("deadline").trim();
-          const member = await fetchGuildMember(interaction);
-          const repos = createRepos(getDb());
-          const service = new ParticipantsService(
-            interaction.client,
-            repos.participantsRepo,
-            repos.eventsRepo,
-            repos.rolesRepo,
-            repos.settingsRepo
-          );
-          await service.configureReactionMode(member, threadId, targetChannel, targetMsg, emojis, deadline);
-          const event = repos.eventsRepo.get(threadId);
-          const panel = service.getPanel(threadId);
-          await interaction.editReply({
-            content: "参加者カウント対象を設定しました。",
-            embeds: event ? [buildParticipantsPanelEmbed(event, panel.config, panel.counts)] : [],
-            components: buildParticipantsPanelComponents(threadId, panel.config)
           });
           return;
         }

@@ -4,10 +4,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ContextMenuCommandBuilder,
-  ModalBuilder,
   StringSelectMenuBuilder,
-  TextInputBuilder,
-  TextInputStyle,
   type GuildMember,
   type MessageContextMenuCommandInteraction
 } from "discord.js";
@@ -69,34 +66,6 @@ export async function handleSetParticipantsTargetCommand(
     ],
     ephemeral: true
   });
-}
-
-export function buildParticipantsTargetEmojisModal(
-  threadId: string,
-  targetChannel: string,
-  targetMsg: string
-): ModalBuilder {
-  return new ModalBuilder()
-    .setCustomId(`participants:target-emojis:${threadId}:${targetChannel}:${targetMsg}`)
-    .setTitle("参加者カウント対象設定")
-    .addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("emojis")
-          .setLabel("絵文字設定")
-          .setPlaceholder("例: ⭕:参加,✨:興味,❌:不参加")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("deadline")
-          .setLabel("締切")
-          .setPlaceholder("空なら開催日時。例: 明日 22:00 / 6/29 22:00")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-      )
-    );
 }
 
 function buildParticipantsTargetConfirmButton(

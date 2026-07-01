@@ -43,6 +43,9 @@ export const participantsModeLabels: Record<string, string> = {
   post: "投稿方式"
 };
 
+export const participantsLabels = ["参加", "不参加"] as const;
+export type ParticipantsLabel = (typeof participantsLabels)[number];
+
 export function mentionUser(userId: string | null | undefined): string {
   return userId ? `<@${userId}>` : "未定";
 }

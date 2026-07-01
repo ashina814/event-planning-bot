@@ -1,4 +1,6 @@
 import type {
+  ActionRowBuilder,
+  ButtonBuilder,
   Client,
   GuildMember,
   Message,
@@ -8,6 +10,7 @@ import type {
   PartialUser,
   User
 } from "discord.js";
+import { ActionRowBuilder as DiscordActionRowBuilder, ButtonBuilder as DiscordButtonBuilder, ButtonStyle } from "discord.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { ParticipantsRepo } from "../../db/repos/participants.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
@@ -23,6 +26,7 @@ import type {
   ParticipantsMode,
   ReactionEmojiConfig
 } from "../../types/index.js";
+import { participantsLabels } from "../../ui/labels.js";
 
 interface SetupInput {
   mode: ParticipantsMode;
@@ -30,6 +34,18 @@ interface SetupInput {
   emojis: string;
   deadline: string;
 }
+
+interface ReactionSetupSession {
+  threadId: string;
+  targetChannel: string;
+  targetMsg: string;
+  setupChannel: string;
+  setupMsg: string;
+  userId: string;
+  emojis: string[];
+}
+
+const reactionSetupSessions = new Map<string, ReactionSetupSession>();
 
 export class ParticipantsPermissionError extends Error {
   override name = "ParticipantsPermissionError";
@@ -52,6 +68,117 @@ export class ParticipantsService {
       config: this.participantsRepo.getConfig(threadId),
       counts: this.participantsRepo.listCounts(threadId)
     };
+  }
+
+  async beginReactionEmojiSetup(
+    member: GuildMember,
+    threadId: string,
+    targetChannel: string,
+    targetMsg: string
+  ): Promise<Message> {
+    const event = this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanConfigure(member, roles);
+
+    const channel = await this.client.channels.fetch(targetChannel);
+    if (!channel || !("send" in channel)) {
+      throw new Error("対象メッセージのチャンネルにセットアップメッセージを投稿できませんでした。");
+    }
+
+    const setupMessage = await channel.send({
+      content: [
+        "👤 **参加者カウントのセットアップ**",
+        "",
+        "このメッセージに、リアクションで絵文字を 2 つ押してください。",
+        "",
+        "1. 「参加」用の絵文字を先に",
+        "2. 「不参加」用の絵文字を後に",
+        "",
+        "押し終わったら [これで確定] を押してください。Nitro絵文字も使えます。"
+      ].join("\n")
+    });
+    await setupMessage.edit({
+      components: this.buildReactionSetupComponents(threadId, setupMessage.id)
+    });
+
+    reactionSetupSessions.set(setupMessage.id, {
+      threadId,
+      targetChannel,
+      targetMsg,
+      setupChannel: setupMessage.channelId,
+      setupMsg: setupMessage.id,
+      userId: member.id,
+      emojis: []
+    });
+
+    return setupMessage;
+  }
+
+  async confirmReactionEmojiSetup(
+    member: GuildMember,
+    threadId: string,
+    setupMsg: string
+  ): Promise<void> {
+    const session = reactionSetupSessions.get(setupMsg);
+    if (!session || session.threadId !== threadId) {
+      throw new Error("参加者カウントのセットアップが見つかりませんでした。もう一度やり直してください。");
+    }
+    if (session.userId !== member.id) {
+      throw new ParticipantsPermissionError("セットアップを開始した本人だけが確定できます。");
+    }
+    if (session.emojis.length !== 2) {
+      throw new Error("参加用と不参加用の絵文字を2つ押してから確定してください。");
+    }
+
+    const event = this.requireEvent(threadId);
+    const emojis = session.emojis.map((emoji, index) => ({
+      emoji,
+      label: participantsLabels[index] ?? participantsLabels[0]
+    }));
+
+    this.participantsRepo.upsertConfig({
+      threadId,
+      mode: "reaction",
+      reactionTargetChannel: session.targetChannel,
+      reactionTargetMsg: session.targetMsg,
+      reactionEmojis: emojis,
+      postTargetChannel: null,
+      postTargetThread: null,
+      deadlineAt: event.scheduled_at
+    });
+    await this.seedReactionCounts(threadId, session.targetChannel, session.targetMsg, emojis);
+    reactionSetupSessions.delete(setupMsg);
+    await this.deleteSetupMessage(session);
+  }
+
+  async cancelReactionEmojiSetup(member: GuildMember, threadId: string, setupMsg: string): Promise<void> {
+    const session = reactionSetupSessions.get(setupMsg);
+    if (!session || session.threadId !== threadId) {
+      return;
+    }
+    if (session.userId !== member.id) {
+      throw new ParticipantsPermissionError("セットアップを開始した本人だけがキャンセルできます。");
+    }
+    reactionSetupSessions.delete(setupMsg);
+    await this.deleteSetupMessage(session);
+  }
+
+  async setupPostChannel(member: GuildMember, threadId: string, channelId: string): Promise<void> {
+    const event = this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanConfigure(member, roles);
+
+    this.participantsRepo.upsertConfig({
+      threadId,
+      mode: "post",
+      reactionTargetChannel: null,
+      reactionTargetMsg: null,
+      reactionEmojis: null,
+      postTargetChannel: channelId,
+      postTargetThread: channelId,
+      deadlineAt: event.scheduled_at
+    });
+    await this.recountPostConfig(threadId);
   }
 
   async setup(member: GuildMember, threadId: string, input: SetupInput): Promise<void> {
@@ -141,6 +268,10 @@ export class ParticipantsService {
 
     const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
     const messageId = fullReaction.message.id;
+    if (await this.recordSetupReaction(fullReaction, user)) {
+      return;
+    }
+
     const configs = this.participantsRepo.findReactionConfigs(messageId);
     if (configs.length === 0) {
       return;
@@ -172,6 +303,10 @@ export class ParticipantsService {
 
     const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
     const messageId = fullReaction.message.id;
+    if (this.removeSetupReaction(fullReaction, user)) {
+      return;
+    }
+
     const configs = this.participantsRepo.findReactionConfigs(messageId);
     if (configs.length === 0) {
       return;
@@ -199,6 +334,74 @@ export class ParticipantsService {
     for (const config of configs) {
       await this.recountPostConfig(config.thread_id);
     }
+  }
+
+  private buildReactionSetupComponents(
+    threadId: string,
+    setupMsg: string
+  ): ActionRowBuilder<ButtonBuilder>[] {
+    return [
+      new DiscordActionRowBuilder<DiscordButtonBuilder>().addComponents(
+        new DiscordButtonBuilder()
+          .setCustomId(`participants:setup-confirm:${threadId}:${setupMsg}`)
+          .setLabel("これで確定")
+          .setStyle(ButtonStyle.Primary),
+        new DiscordButtonBuilder()
+          .setCustomId(`participants:setup-cancel:${threadId}:${setupMsg}`)
+          .setLabel("キャンセル")
+          .setStyle(ButtonStyle.Secondary)
+      )
+    ];
+  }
+
+  private async deleteSetupMessage(session: ReactionSetupSession): Promise<void> {
+    const channel = await this.client.channels.fetch(session.setupChannel).catch(() => null);
+    if (!channel || !("messages" in channel)) {
+      return;
+    }
+    const message = await channel.messages.fetch(session.setupMsg).catch(() => null);
+    await message?.delete().catch(() => null);
+  }
+
+  private async recordSetupReaction(
+    reaction: MessageReaction,
+    user: User | PartialUser
+  ): Promise<boolean> {
+    const session = reactionSetupSessions.get(reaction.message.id);
+    if (!session) {
+      return false;
+    }
+    if (user.id !== session.userId) {
+      return true;
+    }
+
+    const emoji = this.reactionKey(reaction);
+    if (session.emojis.includes(emoji)) {
+      return true;
+    }
+    if (session.emojis.length >= 2) {
+      await reaction.users.remove(user.id).catch(() => null);
+      return true;
+    }
+    session.emojis.push(emoji);
+    return true;
+  }
+
+  private removeSetupReaction(
+    reaction: MessageReaction,
+    user: User | PartialUser
+  ): boolean {
+    const session = reactionSetupSessions.get(reaction.message.id);
+    if (!session) {
+      return false;
+    }
+    if (user.id !== session.userId) {
+      return true;
+    }
+
+    const emoji = this.reactionKey(reaction);
+    session.emojis = session.emojis.filter((item) => item !== emoji);
+    return true;
   }
 
   private async seedReactionCounts(
@@ -258,7 +461,10 @@ export class ParticipantsService {
 
     this.participantsRepo.replaceCounts(
       threadId,
-      [{ label: "_post", normal, late }],
+      [
+        { label: participantsLabels[0], normal, late },
+        { label: participantsLabels[1], normal: 0, late: 0 }
+      ],
       unixNow()
     );
   }
@@ -269,16 +475,16 @@ export class ParticipantsService {
       .map((part) => part.trim())
       .filter(Boolean);
 
-    if (parts.length === 0 || parts.length > 3) {
-      throw new Error("リアクション絵文字は 1 から 3 個で指定してください。");
+    if (parts.length !== 2) {
+      throw new Error("リアクション絵文字は参加用・不参加用の2つで指定してください。");
     }
 
-    return parts.map((part) => {
-      const [emoji, label] = part.split(":").map((value) => value.trim());
-      if (!emoji || !label) {
-        throw new Error("絵文字設定は `絵文字:ラベル` をカンマ区切りで入力してください。");
+    return parts.map((part, index) => {
+      const [emoji] = part.split(":").map((value) => value.trim());
+      if (!emoji) {
+        throw new Error("リアクション絵文字が読めませんでした。");
       }
-      return { emoji, label };
+      return { emoji, label: participantsLabels[index] ?? participantsLabels[0] };
     });
   }
 
@@ -311,7 +517,11 @@ export class ParticipantsService {
     if (!config.reaction_emojis) {
       return [];
     }
-    return JSON.parse(config.reaction_emojis) as ReactionEmojiConfig[];
+    const stored = JSON.parse(config.reaction_emojis) as ReactionEmojiConfig[];
+    return stored.slice(0, 2).map((item, index) => ({
+      emoji: item.emoji,
+      label: participantsLabels[index] ?? participantsLabels[0]
+    }));
   }
 
   private isLate(config: ParticipantsConfigRecord, timestamp: number): boolean {

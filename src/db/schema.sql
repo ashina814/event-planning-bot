@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS participants_config (
   mode            TEXT NOT NULL,
   reaction_target_channel TEXT,
   reaction_target_msg     TEXT,
+  -- JSON array with exactly two entries: 0 = 参加, 1 = 不参加.
   reaction_emojis TEXT,
   post_target_channel TEXT,
   post_target_thread  TEXT,
