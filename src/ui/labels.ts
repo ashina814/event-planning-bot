@@ -1,4 +1,4 @@
-import type { EventStatus, RoleType } from "../types/index.js";
+import type { EventStatus } from "../types/index.js";
 
 export const statusLabels: Record<EventStatus, string> = {
   planning: "企画中",
@@ -9,7 +9,7 @@ export const statusLabels: Record<EventStatus, string> = {
   cancelled: "見送り"
 };
 
-export const roleLabels: Record<RoleType, string> = {
+export const roleLabels: Record<string, string> = {
   main: "主担当",
   mc: "司会・進行",
   announce: "告知担当",
@@ -17,6 +17,14 @@ export const roleLabels: Record<RoleType, string> = {
   prize: "賞金・景品対応",
   support: "サポート"
 };
+
+export const defaultCustomRoleLabels = [
+  "司会・進行",
+  "告知担当",
+  "集計・記録担当",
+  "賞金・景品対応",
+  "サポート"
+] as const;
 
 export const expenseCategoryLabels: Record<string, string> = {
   prize: "賞金",

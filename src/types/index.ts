@@ -19,6 +19,7 @@ export const roleTypes = [
 ] as const;
 
 export type RoleType = (typeof roleTypes)[number];
+export type RoleKind = "main" | "custom";
 
 export const settingKeys = [
   "guildId",
@@ -59,9 +60,21 @@ export interface EventRecord {
 
 export interface EventRoleRecord {
   thread_id: string;
-  role_type: RoleType;
+  role_type: string;
+  role_kind: RoleKind;
+  role_label: string | null;
+  ord: number;
   user_id: string;
   assigned_at: number;
+}
+
+export interface RoleSlot {
+  role_type: string;
+  role_kind: RoleKind;
+  role_label: string | null;
+  ord: number;
+  user_id: string | null;
+  assigned_at: number | null;
 }
 
 export interface SeriesRecord {
@@ -81,6 +94,14 @@ export interface SeriesSectionRecord {
   per_person_sec: number | null;
 }
 
+export interface SeriesDefaultRoleRecord {
+  id: number;
+  series_id: number;
+  role_label: string;
+  ord: number;
+  created_at: number;
+}
+
 export interface SectionHistoryRecord {
   id: number;
   series_id: number;
@@ -94,7 +115,7 @@ export interface SectionHistoryRecord {
 export interface HandoverRecord {
   id: number;
   thread_id: string;
-  role_type: RoleType;
+  role_type: string;
   from_user: string | null;
   to_user: string;
   reason: string | null;

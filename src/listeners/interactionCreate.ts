@@ -9,6 +9,7 @@ import {
 import { config } from "../config.js";
 import { getDb } from "../db/connection.js";
 import { createRepos } from "../db/repos/index.js";
+import { customRoleKey, normalizeRoleLabel, parseRoleKey } from "../db/repos/roles.js";
 import { AnnouncementService } from "../features/announcement/service.js";
 import { EventLifecycleService } from "../features/event-lifecycle/service.js";
 import { ExpenseService } from "../features/expense/service.js";
@@ -51,6 +52,10 @@ import {
   buildMinutesTodoCandidateComponents,
   buildMinutesTodoReviewComponents,
   buildParticipantsModeSelect,
+  buildRoleAssignUserSelect,
+  buildRoleDeleteConfirm,
+  buildRoleHandoverSelect,
+  buildRolePanelComponents,
   buildParticipantsPanelComponents,
   buildRoleTypeSelect,
   buildRoleUserSelect,
@@ -66,6 +71,7 @@ import {
   buildEventsCalendarEmbed,
   buildEventsStatsEmbed,
   buildExpensePanelEmbed,
+  buildFlexibleRolePanelEmbed,
   buildMinutesTodoCandidateEmbed,
   buildMinutesTodoReviewEmbed,
   buildParticipantsPanelEmbed,
@@ -86,6 +92,7 @@ import {
   buildHandoverModal,
   buildMinutesTodoAdoptModal,
   buildParticipantsSetupModal,
+  buildRoleAddModal,
   buildTodoAddModal,
   buildTimerSetupModal
 } from "../ui/modals.js";
@@ -223,6 +230,100 @@ export function registerInteractionCreateListener(client: Client): void {
           }
         }
 
+        if (namespace === "role") {
+          const event = repos.eventsRepo.get(threadId);
+          if (!event) {
+            await interaction.reply({ content: "イベントが見つかりませんでした", ephemeral: true });
+            return;
+          }
+
+          if (action === "change-main") {
+            await interaction.update({
+              content: "主担当にするユーザーを選んでください。",
+              embeds: [],
+              components: buildRoleAssignUserSelect(threadId, "main", "主担当")
+            });
+            return;
+          }
+
+          if (action === "change") {
+            const roleKey = parts[3];
+            if (!roleKey) {
+              throw new Error("指定された役割が無効です");
+            }
+            const label = parseRoleKey(roleKey).roleLabel ?? "主担当";
+            await interaction.update({
+              content: `${label}にするユーザーを選んでください。`,
+              embeds: [],
+              components: buildRoleAssignUserSelect(threadId, roleKey, label)
+            });
+            return;
+          }
+
+          if (action === "add") {
+            await interaction.showModal(buildRoleAddModal(threadId));
+            return;
+          }
+
+          if (action === "handover") {
+            const roles = repos.rolesRepo.listSlots(threadId, event.series_id);
+            await interaction.update({
+              content: "引き継ぐ役割を選んでください。",
+              embeds: [],
+              components: buildRoleHandoverSelect(threadId, roles)
+            });
+            return;
+          }
+
+          if (action === "delete") {
+            const roleKey = parts[3];
+            if (!roleKey) {
+              throw new Error("指定された役割が無効です");
+            }
+            const label = parseRoleKey(roleKey).roleLabel ?? "主担当";
+            await interaction.update({
+              content: `${label}を削除しますか？`,
+              embeds: [],
+              components: buildRoleDeleteConfirm(threadId, roleKey, label)
+            });
+            return;
+          }
+
+          if (action === "delete-cancel") {
+            const roles = repos.rolesRepo.listSlots(threadId, event.series_id);
+            await interaction.update({
+              content: "",
+              embeds: [buildFlexibleRolePanelEmbed(event, roles)],
+              components: buildRolePanelComponents(threadId, roles)
+            });
+            return;
+          }
+
+          if (action === "delete-confirm") {
+            const roleKey = parts[3];
+            if (!roleKey) {
+              throw new Error("指定された役割が無効です");
+            }
+            await interaction.deferUpdate();
+            const member = await fetchGuildMember(interaction);
+            const service = new EventRolesService(
+              interaction.client,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.seriesRepo,
+              repos.settingsRepo
+            );
+            await service.deleteRole(member, threadId, roleKey);
+            const roles = repos.rolesRepo.listSlots(threadId, event.series_id);
+            await interaction.editReply({
+              content: "役割を削除しました。",
+              embeds: [buildFlexibleRolePanelEmbed(event, roles)],
+              components: buildRolePanelComponents(threadId, roles)
+            });
+            return;
+          }
+        }
+
         if (namespace === "event") {
           const event = repos.eventsRepo.get(threadId);
           if (!event) {
@@ -231,10 +332,10 @@ export function registerInteractionCreateListener(client: Client): void {
           }
 
           if (action === "roles") {
-            const roles = repos.rolesRepo.list(threadId);
+            const roles = repos.rolesRepo.listSlots(threadId, event.series_id);
             await interaction.reply({
-              embeds: [buildRolePanelEmbed(event, roles)],
-              components: buildRoleTypeSelect(threadId),
+              embeds: [buildFlexibleRolePanelEmbed(event, roles)],
+              components: buildRolePanelComponents(threadId, roles),
               ephemeral: true
             });
             return;
@@ -255,9 +356,10 @@ export function registerInteractionCreateListener(client: Client): void {
           }
 
           if (action === "handover") {
+            const roles = repos.rolesRepo.listSlots(threadId, event.series_id);
             await interaction.reply({
               content: "どの役割を引き継ぎますか？",
-              components: buildHandoverRoleSelect(threadId),
+              components: buildRoleHandoverSelect(threadId, roles),
               ephemeral: true
             });
             return;
@@ -641,6 +743,31 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
+        if (namespace === "role" && action === "handover-select") {
+          await interaction.showModal(buildHandoverModal(threadId, value));
+          return;
+        }
+
+        if (namespace === "role" && action === "change-select") {
+          const label = parseRoleKey(value).roleLabel ?? "主担当";
+          await interaction.update({
+            content: `${label}にするユーザーを選んでください。`,
+            embeds: [],
+            components: buildRoleAssignUserSelect(threadId, value, label)
+          });
+          return;
+        }
+
+        if (namespace === "role" && action === "delete-select") {
+          const label = parseRoleKey(value).roleLabel ?? "主担当";
+          await interaction.update({
+            content: `${label}を削除しますか？`,
+            embeds: [],
+            components: buildRoleDeleteConfirm(threadId, value, label)
+          });
+          return;
+        }
+
         if (namespace === "expense" && action === "new-category") {
           if (!isExpenseCategory(value)) {
             throw new Error("未知の出費カテゴリです。");
@@ -748,6 +875,33 @@ export function registerInteractionCreateListener(client: Client): void {
 
       if (interaction.isUserSelectMenu()) {
         const [namespace, action, threadId, roleType] = interaction.customId.split(":");
+        if (namespace === "role" && action === "assign" && threadId && roleType) {
+          const userId = interaction.values[0];
+          if (!userId) {
+            return;
+          }
+
+          await interaction.deferUpdate();
+          const member = await fetchGuildMember(interaction);
+          const repos = createRepos(getDb());
+          const service = new EventRolesService(
+            interaction.client,
+            repos.eventsRepo,
+            repos.rolesRepo,
+            repos.seriesRepo,
+            repos.settingsRepo
+          );
+          await service.assignRole(member, threadId, roleType, userId);
+          const event = repos.eventsRepo.get(threadId);
+          const roles = repos.rolesRepo.listSlots(threadId, event?.series_id ?? null);
+          await interaction.editReply({
+            content: `${parseRoleKey(roleType).roleLabel ?? "主担当"}を <@${userId}> に設定しました。`,
+            embeds: event ? [buildFlexibleRolePanelEmbed(event, roles)] : [],
+            components: event ? buildRolePanelComponents(threadId, roles) : []
+          });
+          return;
+        }
+
         if (namespace !== "event" || action !== "role-user" || !threadId || !roleType) {
           return;
         }
@@ -813,6 +967,20 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
+        if (namespace === "role" && action === "add-submit") {
+          await interaction.deferReply({ ephemeral: true });
+          const label = normalizeRoleLabel(interaction.fields.getTextInputValue("role_label"));
+          if (!label) {
+            throw new Error("役割名を入力してください");
+          }
+          const roleKey = customRoleKey(label);
+          await interaction.editReply({
+            content: `${label}にするユーザーを選んでください。`,
+            components: buildRoleAssignUserSelect(threadId, roleKey, label)
+          });
+          return;
+        }
+
         if (namespace === "event" && action === "handover-submit") {
           await interaction.deferReply({ ephemeral: true });
           const rawRoleType = interaction.customId.split(":")[3];
@@ -820,7 +988,7 @@ export function registerInteractionCreateListener(client: Client): void {
           const pendingTasks = interaction.fields.getTextInputValue("pending_tasks").trim();
           const reason = interaction.fields.getTextInputValue("reason").trim();
 
-          if (!rawRoleType || !isRoleType(rawRoleType)) {
+          if (!rawRoleType) {
             throw new Error("未知の役割です。");
           }
 
@@ -839,8 +1007,9 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.settingsRepo
           );
           await service.handover(member, threadId, rawRoleType, newUserId, pendingTasks, reason);
+          const handoverRoleLabel = parseRoleKey(rawRoleType).roleLabel ?? "主担当";
           await interaction.editReply({
-            content: `${roleLabels[rawRoleType]} を <@${newUserId}> に引き継ぎました。`
+            content: `${handoverRoleLabel} を <@${newUserId}> に引き継ぎました。`
           });
           return;
         }

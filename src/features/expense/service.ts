@@ -2,6 +2,7 @@ import type { Client, GuildMember, Message } from "discord.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { ExpensesRepo } from "../../db/repos/expenses.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
+import { roleLabel } from "../../db/repos/roles.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
 import { isEventLead } from "../../lib/permission.js";
@@ -243,7 +244,10 @@ export class ExpenseService {
       return;
     }
 
-    const isPrize = roles.some((role) => role.role_type === "prize" && role.user_id === member.id);
+    const isPrize = roles.some((role) => {
+      const label = roleLabel(role);
+      return role.user_id === member.id && (role.role_type === "prize" || label.includes("賞金") || label.includes("景品"));
+    });
     if (!isPrize) {
       throw new ExpensePermissionError("出費記録は賞金・景品対応担当またはイベント統括のみ可能です。");
     }

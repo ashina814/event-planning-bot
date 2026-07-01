@@ -25,6 +25,15 @@ CREATE TABLE IF NOT EXISTS series_sections (
   UNIQUE(series_id, ord)
 );
 
+CREATE TABLE IF NOT EXISTS series_default_roles (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  series_id       INTEGER NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+  role_label      TEXT NOT NULL,
+  ord             INTEGER NOT NULL,
+  created_at      INTEGER NOT NULL,
+  UNIQUE(series_id, role_label)
+);
+
 CREATE TABLE IF NOT EXISTS events (
   thread_id       TEXT PRIMARY KEY,
   series_id       INTEGER REFERENCES series(id),
@@ -45,6 +54,9 @@ CREATE INDEX IF NOT EXISTS idx_events_scheduled ON events(scheduled_at);
 CREATE TABLE IF NOT EXISTS event_roles (
   thread_id       TEXT NOT NULL REFERENCES events(thread_id) ON DELETE CASCADE,
   role_type       TEXT NOT NULL,
+  role_kind       TEXT NOT NULL DEFAULT 'custom',
+  role_label      TEXT,
+  ord             INTEGER NOT NULL DEFAULT 0,
   user_id         TEXT NOT NULL,
   assigned_at     INTEGER NOT NULL,
   PRIMARY KEY (thread_id, role_type, user_id)

@@ -1,4 +1,5 @@
 import type { Client, GuildMember } from "discord.js";
+import { parseRoleKey, roleLabel } from "../../db/repos/roles.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SeriesRepo } from "../../db/repos/series.js";
@@ -9,8 +10,6 @@ import {
 } from "../../lib/permission.js";
 import { normalizeOptionalText } from "../../lib/parser.js";
 import { unixNow } from "../../lib/time.js";
-import type { RoleType } from "../../types/index.js";
-import { roleLabels } from "../../ui/labels.js";
 import { syncEventArtifacts } from "../event-lifecycle/sync.js";
 
 export class EventRolesService {
@@ -25,43 +24,54 @@ export class EventRolesService {
   async assignRole(
     member: GuildMember,
     threadId: string,
-    roleType: RoleType,
+    roleKey: string,
     userId: string
   ): Promise<void> {
     const event = this.requireEvent(threadId);
     const roles = this.rolesRepo.list(threadId);
-    assertCanAssignRole(member, event, roles, roleType, this.settingsRepo);
+    const identity = parseRoleKey(roleKey);
+    assertCanAssignRole(member, event, roles, identity.roleType, this.settingsRepo);
 
     const now = unixNow();
-    this.rolesRepo.replaceSingle(threadId, roleType, userId, now);
+    this.rolesRepo.replaceSingle(threadId, roleKey, userId, now);
     await this.postToThread(
       threadId,
-      `<@${userId}> が **${roleLabels[roleType]}** になりました。`
+      `<@${userId}> が **${identity.roleLabel ?? "主担当"}** になりました。`
     );
+    await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
+  }
+
+  async deleteRole(member: GuildMember, threadId: string, roleKey: string): Promise<void> {
+    const event = this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    assertCanAssignRole(member, event, roles, roleKey, this.settingsRepo);
+    this.rolesRepo.deleteRole(threadId, roleKey);
     await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
   }
 
   async handover(
     member: GuildMember,
     threadId: string,
-    roleType: RoleType,
+    roleKey: string,
     newUserId: string,
     pendingTasks: string,
     reason: string
   ): Promise<void> {
     const event = this.requireEvent(threadId);
     const roles = this.rolesRepo.list(threadId);
-    assertCanHandover(member, event, roles, roleType, this.settingsRepo);
+    const identity = parseRoleKey(roleKey);
+    assertCanHandover(member, event, roles, identity.roleType, this.settingsRepo);
 
-    const current = this.rolesRepo.getFirst(threadId, roleType);
+    const current = this.rolesRepo.getByKey(threadId, roleKey);
     const fromUser = current?.user_id ?? member.id;
     const now = unixNow();
+    const label = current ? roleLabel(current) : identity.roleLabel ?? "主担当";
 
-    this.rolesRepo.replaceSingle(threadId, roleType, newUserId, now);
+    this.rolesRepo.replaceSingle(threadId, roleKey, newUserId, now);
     const declared = await this.postToThread(
       threadId,
       [
-        `🤝 **引き継ぎ宣言: ${roleLabels[roleType]}**`,
+        `🤝 **引き継ぎ宣言: ${label}**`,
         "",
         `<@${fromUser}> から <@${newUserId}> に引き継ぎます。`,
         `残タスク: ${pendingTasks}`,
@@ -73,7 +83,7 @@ export class EventRolesService {
 
     this.rolesRepo.insertHandover({
       threadId,
-      roleType,
+      roleType: identity.roleType,
       fromUser,
       toUser: newUserId,
       reason: normalizeOptionalText(reason),
@@ -88,7 +98,7 @@ export class EventRolesService {
   private requireEvent(threadId: string) {
     const event = this.eventsRepo.get(threadId);
     if (!event) {
-      throw new Error("イベントが DB に見つかりません。");
+      throw new Error("イベントが見つかりませんでした");
     }
     return event;
   }

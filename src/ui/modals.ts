@@ -4,9 +4,9 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from "discord.js";
-import type { BotSettings, ExpenseCategory, ExpenseDirection, ParticipantsMode, RoleType, TodoRecord } from "../types/index.js";
+import type { BotSettings, ExpenseCategory, ExpenseDirection, ParticipantsMode, TodoRecord } from "../types/index.js";
 
-export function buildHandoverModal(threadId: string, roleType: RoleType): ModalBuilder {
+export function buildHandoverModal(threadId: string, roleType: string): ModalBuilder {
   return new ModalBuilder()
     .setCustomId(`event:handover-submit:${threadId}:${roleType}`)
     .setTitle("引き継ぎ宣言")
@@ -34,6 +34,23 @@ export function buildHandoverModal(threadId: string, roleType: RoleType): ModalB
           .setPlaceholder("任意")
           .setStyle(TextInputStyle.Short)
           .setRequired(false)
+      )
+    );
+}
+
+export function buildRoleAddModal(threadId: string): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`role:add-submit:${threadId}`)
+    .setTitle("役割を追加")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("role_label")
+          .setLabel("役割名")
+          .setPlaceholder("例: 司会・進行 / 告知担当 / 賞金・景品対応")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(15)
       )
     );
 }

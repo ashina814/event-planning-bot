@@ -323,7 +323,9 @@ export class ParticipantsService {
       return;
     }
 
-    const isMain = roles.some((role) => role.role_type === "main" && role.user_id === member.id);
+    const isMain = roles.some(
+      (role) => (role.role_kind === "main" || role.role_type === "main") && role.user_id === member.id
+    );
     if (!isMain) {
       throw new ParticipantsPermissionError("参加者カウント設定は主担当・イベント統括のみ可能です。");
     }

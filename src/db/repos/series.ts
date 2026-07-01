@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import type {
   SectionHistoryRecord,
+  SeriesDefaultRoleRecord,
   SeriesRecord,
   SeriesSectionRecord
 } from "../../types/index.js";
@@ -50,6 +51,31 @@ export class SeriesRepo {
     return this.db
       .prepare("SELECT * FROM series_sections WHERE series_id = ? ORDER BY ord ASC")
       .all(seriesId) as SeriesSectionRecord[];
+  }
+
+  listDefaultRoles(seriesId: number): SeriesDefaultRoleRecord[] {
+    return this.db
+      .prepare("SELECT * FROM series_default_roles WHERE series_id = ? ORDER BY ord ASC")
+      .all(seriesId) as SeriesDefaultRoleRecord[];
+  }
+
+  replaceDefaultRoles(seriesId: number, labels: string[], now: number): void {
+    const cleaned = labels
+      .map((label) => label.replace(/\s+/g, " ").trim().slice(0, 15))
+      .filter(Boolean);
+    const unique = [...new Set(cleaned)];
+
+    const tx = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM series_default_roles WHERE series_id = ?").run(seriesId);
+      const insert = this.db.prepare(
+        `INSERT INTO series_default_roles (series_id, role_label, ord, created_at)
+         VALUES (?, ?, ?, ?)`
+      );
+      unique.forEach((label, index) => {
+        insert.run(seriesId, label, (index + 1) * 10, now);
+      });
+    });
+    tx();
   }
 
   upsertSection(

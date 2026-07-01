@@ -13,6 +13,7 @@ import {
   type EventRecord,
   type EventStatus,
   type ParticipantsMode,
+  type RoleSlot,
   type RoleType,
   type TodoRecord
 } from "../types/index.js";
@@ -26,6 +27,7 @@ import {
   statusLabels
 } from "./labels.js";
 import { shiftMonthKey } from "../features/overview/calendar.js";
+import { mainRoleKey, roleKeyFor, roleLabel } from "../db/repos/roles.js";
 import { formatJstDateTime } from "../lib/time.js";
 
 function selectText(value: string, maxLength: number): string {
@@ -147,7 +149,7 @@ export function buildRoleTypeSelect(threadId: string): ActionRowBuilder<StringSe
         .setPlaceholder("変更する担当")
         .addOptions(
           roleTypes.map((roleType) => ({
-            label: roleLabels[roleType],
+            label: roleLabels[roleType] ?? roleType,
             value: roleType
           }))
         )
@@ -163,7 +165,7 @@ export function buildHandoverRoleSelect(threadId: string): ActionRowBuilder<Stri
         .setPlaceholder("引き継ぐ役割を選択")
         .addOptions(
           roleTypes.map((roleType) => ({
-            label: roleLabels[roleType],
+            label: roleLabels[roleType] ?? roleType,
             value: roleType
           }))
         )
@@ -179,9 +181,133 @@ export function buildRoleUserSelect(
     new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
       new UserSelectMenuBuilder()
         .setCustomId(`event:role-user:${threadId}:${roleType}`)
-        .setPlaceholder(`${roleLabels[roleType]}にするユーザー`)
+        .setPlaceholder(`${roleLabels[roleType] ?? roleType}にするユーザー`)
         .setMinValues(1)
         .setMaxValues(1)
+    )
+  ];
+}
+
+export function buildRolePanelComponents(
+  threadId: string,
+  roles: RoleSlot[]
+): Array<ActionRowBuilder<ButtonBuilder> | ActionRowBuilder<StringSelectMenuBuilder>> {
+  const rows: Array<ActionRowBuilder<ButtonBuilder> | ActionRowBuilder<StringSelectMenuBuilder>> = [];
+  const main = roles.find((role) => role.role_kind === "main" || role.role_type === mainRoleKey);
+  const custom = roles.filter((role) => role.role_kind !== "main" && role.role_type !== mainRoleKey);
+  const deletable = custom.filter((role) => role.user_id);
+
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`role:change-main:${threadId}`)
+        .setLabel("主担当を変更")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!main)
+    )
+  );
+
+  if (custom.length > 0) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`role:change-select:${threadId}`)
+          .setPlaceholder("変更する役割を選択")
+          .addOptions(
+            custom.slice(0, 25).map((role) => ({
+              label: roleLabel(role).slice(0, 100),
+              value: roleKeyFor(role),
+              description: role.user_id ? `<@${role.user_id}>` : "未設定"
+            }))
+          )
+      )
+    );
+  }
+
+  if (deletable.length > 0) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`role:delete-select:${threadId}`)
+          .setPlaceholder("削除する役割を選択")
+          .addOptions(
+            deletable.slice(0, 25).map((role) => ({
+              label: roleLabel(role).slice(0, 100),
+              value: roleKeyFor(role),
+              description: role.user_id ? `<@${role.user_id}>` : "未設定"
+            }))
+          )
+      )
+    );
+  }
+
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`role:add:${threadId}`)
+        .setLabel("役割を追加")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`role:handover:${threadId}`)
+        .setLabel("引き継ぎ")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
+
+  return rows.slice(0, 5);
+}
+
+export function buildRoleAssignUserSelect(
+  threadId: string,
+  roleKey: string,
+  label: string
+): ActionRowBuilder<UserSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+      new UserSelectMenuBuilder()
+        .setCustomId(`role:assign:${threadId}:${roleKey}`)
+        .setPlaceholder(`${label}にするユーザー`.slice(0, 100))
+        .setMinValues(1)
+        .setMaxValues(1)
+    )
+  ];
+}
+
+export function buildRoleHandoverSelect(
+  threadId: string,
+  roles: RoleSlot[]
+): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`role:handover-select:${threadId}`)
+        .setPlaceholder("引き継ぐ役割を選択")
+        .addOptions(
+          roles.slice(0, 25).map((role) => ({
+            label: roleLabel(role).slice(0, 100),
+            value: roleKeyFor(role),
+            description: role.user_id ? `<@${role.user_id}>` : "未設定"
+          }))
+        )
+    )
+  ];
+}
+
+export function buildRoleDeleteConfirm(
+  threadId: string,
+  roleKey: string,
+  label: string
+): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`role:delete-confirm:${threadId}:${roleKey}`)
+        .setLabel(`${label}を削除`.slice(0, 80))
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`role:delete-cancel:${threadId}`)
+        .setLabel("キャンセル")
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }

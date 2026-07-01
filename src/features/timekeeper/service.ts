@@ -1,6 +1,7 @@
 import type { Client, GuildMember } from "discord.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
+import { roleLabel } from "../../db/repos/roles.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SeriesRepo } from "../../db/repos/series.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
@@ -280,7 +281,10 @@ export class TimekeeperService {
 
     const canOperate = roles.some(
       (role) =>
-        (role.role_type === "main" || role.role_type === "mc") &&
+        ((role.role_kind === "main" || role.role_type === "main") ||
+          role.role_type === "mc" ||
+          roleLabel(role).includes("司会") ||
+          roleLabel(role).includes("進行")) &&
         role.user_id === member.id
     );
     if (!canOperate) {

@@ -2,6 +2,7 @@ import { type Client, type GuildMember } from "discord.js";
 import type { AnnouncementsRepo } from "../../db/repos/announcements.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
+import { roleLabel } from "../../db/repos/roles.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
 import { isEventLead } from "../../lib/permission.js";
@@ -150,7 +151,9 @@ export class AnnouncementService {
 
     const canEdit = roles.some(
       (role) =>
-        (role.role_type === "main" || role.role_type === "announce") &&
+        ((role.role_kind === "main" || role.role_type === "main") ||
+          role.role_type === "announce" ||
+          roleLabel(role).includes("告知")) &&
         role.user_id === member.id
     );
     if (!canEdit) {

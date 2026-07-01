@@ -1,6 +1,6 @@
 import type { ChatInputCommandInteraction, GuildMember, Interaction } from "discord.js";
 import type { SettingsRepo } from "../db/repos/settings.js";
-import type { EventRecord, EventRoleRecord, RoleType } from "../types/index.js";
+import type { EventRecord, EventRoleRecord } from "../types/index.js";
 
 export class PermissionError extends Error {
   override name = "PermissionError";
@@ -51,7 +51,7 @@ export function assertCanManageEvent(
   }
 
   const isMain = roles.some(
-    (role) => role.role_type === "main" && role.user_id === member.id
+    (role) => (role.role_kind === "main" || role.role_type === "main") && role.user_id === member.id
   );
   if (!isMain) {
     throw new PermissionError(
@@ -64,7 +64,7 @@ export function assertCanAssignRole(
   member: GuildMember,
   event: EventRecord,
   roles: EventRoleRecord[],
-  roleType: RoleType,
+  roleType: string,
   settingsRepo: SettingsRepo
 ): void {
   if (roleType === "main") {
@@ -81,7 +81,7 @@ export function assertCanHandover(
   member: GuildMember,
   event: EventRecord,
   roles: EventRoleRecord[],
-  roleType: RoleType,
+  roleType: string,
   settingsRepo: SettingsRepo
 ): void {
   if (isEventLead(member, settingsRepo)) {

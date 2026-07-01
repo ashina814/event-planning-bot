@@ -17,8 +17,8 @@ export async function renderControlPanel(
     throw new Error("イベントが見つかりませんでした。");
   }
 
-  const roles = rolesRepo.list(threadId);
   const series = event.series_id ? seriesRepo.findById(event.series_id) : null;
+  const roles = rolesRepo.listSlots(threadId, event.series_id);
   const payload = {
     embeds: [buildControlPanelEmbed(event, roles, series)],
     components: buildControlPanelComponents(event)

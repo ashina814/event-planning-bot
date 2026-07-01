@@ -144,7 +144,7 @@ function findTargetEvents(member: GuildMember, repos: Repos): EventRecord[] {
       }
       return repos.rolesRepo
         .list(event.thread_id)
-        .some((role) => role.role_type === "main" && role.user_id === member.id);
+        .some((role) => (role.role_kind === "main" || role.role_type === "main") && role.user_id === member.id);
     });
 }
 

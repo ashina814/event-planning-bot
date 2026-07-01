@@ -22,8 +22,8 @@ export async function syncParentPost(
     return;
   }
 
-  const roles = rolesRepo.list(threadId);
   const series = event.series_id ? seriesRepo.findById(event.series_id) : null;
+  const roles = rolesRepo.listSlots(threadId, event.series_id);
   const message = await channel.messages.fetch(event.parent_msg_id).catch(() => null);
 
   if (!message) {

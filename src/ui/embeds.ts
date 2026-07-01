@@ -11,20 +11,37 @@ import type {
   ExpenseRecord,
   ParticipantsConfigRecord,
   ParticipantsCountRecord,
+  RoleSlot,
   SeriesRecord,
   TodoRecord,
   TimerScheduleRecord,
   TimerSectionRecord
 } from "../types/index.js";
 import { mentionUser, roleLabels, statusLabels } from "./labels.js";
+import { roleLabel } from "../db/repos/roles.js";
 
-function roleUser(roles: EventRoleRecord[], roleType: EventRoleRecord["role_type"]): string {
-  return mentionUser(roles.find((role) => role.role_type === roleType)?.user_id);
+type RoleView = EventRoleRecord | RoleSlot;
+
+function roleUser(input: RoleView[] | string | null | undefined, roleType?: string): string {
+  if (Array.isArray(input)) {
+    const role = input.find((item) =>
+      roleType === "main"
+        ? item.role_kind === "main" || item.role_type === "main"
+        : item.role_type === roleType || roleLabel(item) === roleType
+    );
+    return mentionUser(role?.user_id ?? undefined);
+  }
+  return mentionUser(input ?? undefined);
+}
+
+function roleLines(roles: RoleView[]): string {
+  const lines = roles.map((role) => `${roleLabel(role)}: ${roleUser(role.user_id)}`);
+  return lines.length > 0 ? lines.join("\n") : "主担当: 未設定";
 }
 
 export function buildControlPanelEmbed(
   event: EventRecord,
-  roles: EventRoleRecord[],
+  roles: RoleView[],
   series: SeriesRecord | null
 ): EmbedBuilder {
   const scheduled = event.scheduled_at ? formatJstDateTime(event.scheduled_at) : "未定";
@@ -65,7 +82,7 @@ export function buildControlPanelEmbed(
 
 export function buildParentPost(
   event: Pick<EventRecord, "title" | "status" | "scheduled_at" | "created_by">,
-  roles: EventRoleRecord[],
+  roles: RoleView[],
   series: SeriesRecord | null
 ): string {
   return [
@@ -220,8 +237,21 @@ export function buildRolePanelEmbed(event: EventRecord, roles: EventRoleRecord[]
     .setDescription("変更する担当を選んでから、次の画面でユーザーを選択してください。")
     .addFields(
       (["main", "mc", "announce", "record", "prize", "support"] as const).map((roleType) => ({
-        name: roleLabels[roleType],
+        name: roleLabels[roleType] ?? roleType,
         value: roleUser(roles, roleType),
+        inline: true
+      }))
+    );
+}
+
+export function buildFlexibleRolePanelEmbed(event: EventRecord, roles: RoleSlot[]): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle(`担当管理: ${event.title}`)
+    .setDescription("変更する担当を選んで、次の画面でユーザーを選択してください。")
+    .addFields(
+      roles.map((role) => ({
+        name: roleLabel(role),
+        value: roleUser(role.user_id),
         inline: true
       }))
     );
