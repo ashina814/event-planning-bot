@@ -12,6 +12,12 @@ import { createRepos } from "../db/repos/index.js";
 import { AnnouncementService } from "../features/announcement/service.js";
 import { EventLifecycleService } from "../features/event-lifecycle/service.js";
 import { ExpenseService } from "../features/expense/service.js";
+import {
+  buildHelpSelectMenu,
+  buildHelpTopicEmbed,
+  helpTopics,
+  type HelpTopic
+} from "../features/help/index.js";
 import { OverviewService } from "../features/overview/service.js";
 import { ParticipantsService } from "../features/participants/service.js";
 import { EventRolesService } from "../features/roles/service.js";
@@ -103,6 +109,10 @@ function isExpenseDirection(value: string): value is ExpenseDirection {
 
 function isParticipantsMode(value: string): value is ParticipantsMode {
   return value === "reaction" || value === "post";
+}
+
+function isHelpTopic(value: string): value is HelpTopic {
+  return helpTopics.some((topic) => topic.value === value);
 }
 
 function assertOwner(userId: string): void {
@@ -566,12 +576,24 @@ export function registerInteractionCreateListener(client: Client): void {
       if (interaction.isStringSelectMenu()) {
         const parts = interaction.customId.split(":");
         const [namespace, action, threadId] = parts;
-        if (!threadId) {
-          return;
-        }
 
         const value = interaction.values[0];
         if (!value) {
+          return;
+        }
+
+        if (namespace === "help" && action === "topic") {
+          if (!isHelpTopic(value)) {
+            throw new Error("未知のヘルプ項目です。");
+          }
+          await interaction.update({
+            embeds: [buildHelpTopicEmbed(value)],
+            components: [buildHelpSelectMenu()]
+          });
+          return;
+        }
+
+        if (!threadId) {
           return;
         }
 

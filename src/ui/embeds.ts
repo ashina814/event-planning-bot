@@ -1,4 +1,5 @@
 import { EmbedBuilder } from "discord.js";
+import { buildHelpInitialEmbed } from "../features/help/index.js";
 import { renderMonthCalendar } from "../features/overview/calendar.js";
 import type { OverviewStats } from "../features/overview/service.js";
 import { formatJstDateTime, formatJstTime } from "../lib/time.js";
@@ -91,27 +92,7 @@ export function buildParentPost(
 }
 
 export function buildHelpEmbed(): EmbedBuilder {
-  return new EmbedBuilder()
-    .setTitle("Event Planning Bot")
-    .setDescription("イベント企画室の prefix・担当・引き継ぎ事故を減らすための bot です。")
-    .addFields(
-      {
-        name: "/event new <タイトル> [シリーズ]",
-        value: "イベントフォーラムに企画スレッドとコントロールパネルを作ります。"
-      },
-      {
-        name: "/events",
-        value: "進行中イベントの一覧を表示します。"
-      },
-      {
-        name: "/admin",
-        value: "OWNER_ID のユーザーだけが開ける管理パネルです。"
-      },
-      {
-        name: "コントロールパネル",
-        value: "スレッド内の常駐ボタンから担当変更、状態変更、告知文、タイマー、参加者カウント、ToDo、出費を操作します。"
-      }
-    );
+  return buildHelpInitialEmbed();
 }
 
 function settingLine(label: string, value: string | undefined): string {
