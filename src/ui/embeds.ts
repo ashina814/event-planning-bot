@@ -146,7 +146,7 @@ export function buildEventsListEmbed(events: EventRecord[], guildId?: string | n
         const scheduled = event.scheduled_at ? formatJstDateTime(event.scheduled_at) : "未定";
         const location = guildId
           ? `https://discord.com/channels/${guildId}/${event.thread_id}`
-          : `thread_id=${event.thread_id}`;
+          : "イベントリンク未設定";
         return `• **${event.title}** / ${statusLabels[event.status]} / ${scheduled}\n  ${location}`;
       })
       .join("\n")

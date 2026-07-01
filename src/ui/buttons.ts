@@ -26,6 +26,7 @@ import {
   statusLabels
 } from "./labels.js";
 import { shiftMonthKey } from "../features/overview/calendar.js";
+import { formatJstDateTime } from "../lib/time.js";
 
 function selectText(value: string, maxLength: number): string {
   const trimmed = value.replace(/\s+/g, " ").trim();
@@ -426,7 +427,10 @@ export function buildMinutesTodoCandidateComponents(
             events.slice(0, 25).map((event) => ({
               label: selectText(event.title, 90),
               value: event.thread_id,
-              description: selectText(event.thread_id, 100)
+              description: selectText(
+                `${statusLabels[event.status]} / ${event.scheduled_at ? formatJstDateTime(event.scheduled_at) : "開催日時未定"}`,
+                100
+              )
             }))
           )
       )

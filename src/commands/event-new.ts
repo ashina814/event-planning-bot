@@ -45,8 +45,9 @@ export const eventCommand: CommandModule = {
     );
 
     const event = await service.createFromCommand(interaction);
+    const eventUrl = `https://discord.com/channels/${interaction.guildId}/${event.thread_id}`;
     await interaction.editReply({
-      content: `作成しました: https://discord.com/channels/${interaction.guildId}/${event.thread_id}`
+      content: `作成しました: ${eventUrl}`
     });
   }
 };

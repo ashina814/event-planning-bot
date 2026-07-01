@@ -37,7 +37,7 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
       const threadId = String(payload.threadId ?? "");
       const scheduledAt = payload.scheduledAt ? Number(payload.scheduledAt) : null;
       if (!threadId) {
-        throw new Error("event_auto_progress payload.threadId is required");
+        throw new Error("イベントが指定されていません。");
       }
       const service = new EventLifecycleService(
         deps.client,
@@ -129,7 +129,7 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
       const threadId = String(payload.threadId ?? "");
       const scheduledAt = payload.scheduledAt ? Number(payload.scheduledAt) : null;
       if (!threadId) {
-        throw new Error("event_reminder_retrospective payload.threadId is required");
+        throw new Error("イベントが指定されていません。");
       }
       const service = new EventLifecycleService(
         deps.client,

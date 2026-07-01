@@ -14,7 +14,7 @@ export async function renderControlPanel(
 ): Promise<void> {
   const event = eventsRepo.get(threadId);
   if (!event) {
-    throw new Error(`event not found: ${threadId}`);
+    throw new Error("イベントが見つかりませんでした。");
   }
 
   const roles = rolesRepo.list(threadId);
@@ -26,7 +26,7 @@ export async function renderControlPanel(
 
   const channel = await client.channels.fetch(threadId);
   if (!channel || !("send" in channel) || !("messages" in channel)) {
-    throw new Error(`thread channel not found or not messageable: ${threadId}`);
+    throw new Error("このスレッドにコントロールパネルを投稿できませんでした。");
   }
 
   if (event.control_msg_id) {
