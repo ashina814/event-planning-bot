@@ -59,28 +59,18 @@ export class ParticipantsService {
     const roles = this.rolesRepo.list(threadId);
     this.assertCanConfigure(member, roles);
 
-    const deadlineAt = this.parseDeadline(event, input.deadline);
     const targetId = parseDiscordSnowflake(input.target, "last");
     if (!targetId) {
       throw new Error("対象は Discord URL、ID、#チャンネル、メッセージID のいずれかで入力してください。");
     }
 
     if (input.mode === "reaction") {
-      const emojis = this.parseEmojiConfig(input.emojis);
       const channelId = this.extractChannelId(input.target) ?? event.thread_id;
-      this.participantsRepo.upsertConfig({
-        threadId,
-        mode: "reaction",
-        reactionTargetChannel: channelId,
-        reactionTargetMsg: targetId,
-        reactionEmojis: emojis,
-        postTargetChannel: null,
-        postTargetThread: null,
-        deadlineAt
-      });
-      await this.seedReactionCounts(threadId, channelId, targetId, emojis);
+      await this.configureReactionMode(member, threadId, channelId, targetId, input.emojis, input.deadline);
       return;
     }
+
+    const deadlineAt = this.parseDeadline(event, input.deadline);
 
     this.participantsRepo.upsertConfig({
       threadId,
@@ -93,6 +83,33 @@ export class ParticipantsService {
       deadlineAt
     });
     await this.recountPostConfig(threadId);
+  }
+
+  async configureReactionMode(
+    member: GuildMember,
+    threadId: string,
+    targetChannel: string,
+    targetMsg: string,
+    emojisInput: string,
+    deadlineInput: string
+  ): Promise<void> {
+    const event = this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanConfigure(member, roles);
+
+    const emojis = this.parseEmojiConfig(emojisInput);
+    const deadlineAt = this.parseDeadline(event, deadlineInput);
+    this.participantsRepo.upsertConfig({
+      threadId,
+      mode: "reaction",
+      reactionTargetChannel: targetChannel,
+      reactionTargetMsg: targetMsg,
+      reactionEmojis: emojis,
+      postTargetChannel: null,
+      postTargetThread: null,
+      deadlineAt
+    });
+    await this.seedReactionCounts(threadId, targetChannel, targetMsg, emojis);
   }
 
   async refresh(threadId: string): Promise<void> {
