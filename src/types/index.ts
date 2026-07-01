@@ -20,6 +20,29 @@ export const roleTypes = [
 
 export type RoleType = (typeof roleTypes)[number];
 
+export const settingKeys = [
+  "guildId",
+  "eventForum",
+  "eventAnnounce",
+  "internalAnnounce",
+  "expenseLog",
+  "minutes",
+  "freeChat",
+  "meetingVc",
+  "eventLeadRole",
+  "eventerRole"
+] as const;
+
+export type SettingKey = (typeof settingKeys)[number];
+
+export type BotSettings = Partial<Record<SettingKey, string>>;
+
+export interface BotSettingRecord {
+  key: SettingKey;
+  value: string;
+  updated_at: number;
+}
+
 export interface EventRecord {
   thread_id: string;
   series_id: number | null;

@@ -1,9 +1,9 @@
 import type { Client, GuildMember, Message } from "discord.js";
-import { config } from "../../config.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { ExpensesRepo } from "../../db/repos/expenses.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
+import type { SettingsRepo } from "../../db/repos/settings.js";
 import { isEventLead } from "../../lib/permission.js";
 import { parseDiscordSnowflake } from "../../lib/parser.js";
 import {
@@ -46,7 +46,8 @@ export class ExpenseService {
     private readonly expensesRepo: ExpensesRepo,
     private readonly eventsRepo: EventsRepo,
     private readonly rolesRepo: RolesRepo,
-    private readonly jobsRepo: JobsRepo
+    private readonly jobsRepo: JobsRepo,
+    private readonly settingsRepo: SettingsRepo
   ) {}
 
   getPanel(threadId: string): ExpensePanel {
@@ -141,12 +142,13 @@ export class ExpenseService {
   }
 
   private async postExpenseLog(expense: ExpenseRecord): Promise<void> {
-    if (!config.channels.expenseLog) {
+    const expenseLog = this.settingsRepo.get("expenseLog");
+    if (!expenseLog) {
       return;
     }
 
     const event = expense.thread_id ? this.eventsRepo.get(expense.thread_id) : null;
-    const channel = await this.client.channels.fetch(config.channels.expenseLog);
+    const channel = await this.client.channels.fetch(expenseLog);
     if (!channel || !("send" in channel)) {
       throw new Error("出費ログチャンネルが見つかりません。");
     }
@@ -216,15 +218,16 @@ export class ExpenseService {
     threshold: number,
     scope: string
   ): Promise<void> {
+    const eventLeadRole = this.settingsRepo.get("eventLeadRole");
     const content = [
-      `💰 <@&${config.roles.eventLead}> 出費閾値を超えました。`,
+      `💰 ${eventLeadRole ? `<@&${eventLeadRole}>` : "イベント統括"} 出費閾値を超えました。`,
       `対象: ${title}`,
       `金額: ${amount.toLocaleString("ja-JP")} Land`,
       `閾値: ${threshold.toLocaleString("ja-JP")} Land`,
       `scope: ${scope}`
     ].join("\n");
 
-    const channelId = config.channels.internalAnnounce || config.channels.expenseLog;
+    const channelId = this.settingsRepo.get("internalAnnounce") || this.settingsRepo.get("expenseLog");
     if (!channelId) {
       return;
     }
@@ -236,7 +239,7 @@ export class ExpenseService {
   }
 
   private assertCanRecord(member: GuildMember, roles: EventRoleRecord[]): void {
-    if (isEventLead(member)) {
+    if (isEventLead(member, this.settingsRepo)) {
       return;
     }
 

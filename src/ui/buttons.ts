@@ -438,3 +438,30 @@ export function buildEventsOverviewComponents(monthKey: string): ActionRowBuilde
     )
   ];
 }
+
+export function buildAdminPanelComponents(): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("admin:base:panel")
+        .setEmoji("🏠")
+        .setLabel("基本")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("admin:channels1:panel")
+        .setEmoji("📺")
+        .setLabel("チャンネル1")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("admin:channels2:panel")
+        .setEmoji("📺")
+        .setLabel("チャンネル2")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("admin:roles:panel")
+        .setEmoji("🛡️")
+        .setLabel("ロール")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}

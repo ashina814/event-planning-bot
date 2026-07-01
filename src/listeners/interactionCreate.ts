@@ -1,5 +1,6 @@
 import { Events, type Client, type Interaction } from "discord.js";
 import { commandMap } from "../commands/index.js";
+import { config } from "../config.js";
 import { getDb } from "../db/connection.js";
 import { createRepos } from "../db/repos/index.js";
 import { AnnouncementService } from "../features/announcement/service.js";
@@ -14,10 +15,11 @@ import { fetchGuildMember, PermissionError } from "../lib/permission.js";
 import { parseDiscordUserId } from "../lib/parser.js";
 import { formatJstDateTime } from "../lib/time.js";
 import { logger } from "../lib/logger.js";
-import { eventStatuses, roleTypes, type EventStatus, type RoleType } from "../types/index.js";
+import { eventStatuses, roleTypes, type EventStatus, type RoleType, type SettingKey } from "../types/index.js";
 import {
   buildAnnouncementActions,
   buildAnnouncementPanelComponents,
+  buildAdminPanelComponents,
   buildEventsOverviewComponents,
   buildExpensePanelComponents,
   buildMinutesTodoCandidateComponents,
@@ -33,6 +35,7 @@ import {
 import {
   buildAnnouncementPanelEmbed,
   buildAnnouncementPreviewEmbed,
+  buildAdminPanelEmbed,
   buildEventsCalendarEmbed,
   buildEventsStatsEmbed,
   buildExpensePanelEmbed,
@@ -47,6 +50,10 @@ import {
 import {
   buildAnnouncementCreateModal,
   buildAnnouncementScheduleModal,
+  buildAdminBaseModal,
+  buildAdminChannels1Modal,
+  buildAdminChannels2Modal,
+  buildAdminRolesModal,
   buildEventScheduleModal,
   buildExpenseCreateModal,
   buildHandoverModal,
@@ -67,6 +74,12 @@ function isEventStatus(value: string): value is EventStatus {
 
 function isParticipantsMode(value: string): value is "reaction" | "post" {
   return value === "reaction" || value === "post";
+}
+
+function assertOwner(userId: string): void {
+  if (userId !== config.ownerId) {
+    throw new PermissionError("この管理パネルは OWNER_ID のユーザーのみ使えます。");
+  }
 }
 
 async function replyError(interaction: Interaction, error: unknown): Promise<void> {
@@ -108,6 +121,31 @@ export function registerInteractionCreateListener(client: Client): void {
         }
 
         const repos = createRepos(getDb());
+
+        if (namespace === "admin") {
+          assertOwner(interaction.user.id);
+          const settings = repos.settingsRepo.all();
+
+          if (action === "base") {
+            await interaction.showModal(buildAdminBaseModal(settings));
+            return;
+          }
+
+          if (action === "channels1") {
+            await interaction.showModal(buildAdminChannels1Modal(settings));
+            return;
+          }
+
+          if (action === "channels2") {
+            await interaction.showModal(buildAdminChannels2Modal(settings));
+            return;
+          }
+
+          if (action === "roles") {
+            await interaction.showModal(buildAdminRolesModal(settings));
+            return;
+          }
+        }
 
         if (namespace === "events") {
           const service = new OverviewService(
@@ -202,7 +240,8 @@ export function registerInteractionCreateListener(client: Client): void {
               interaction.client,
               repos.participantsRepo,
               repos.eventsRepo,
-              repos.rolesRepo
+              repos.rolesRepo,
+              repos.settingsRepo
             ).getPanel(threadId);
             await interaction.reply({
               embeds: [buildParticipantsPanelEmbed(event, panel.config, panel.counts)],
@@ -228,7 +267,8 @@ export function registerInteractionCreateListener(client: Client): void {
               repos.expensesRepo,
               repos.eventsRepo,
               repos.rolesRepo,
-              repos.jobsRepo
+              repos.jobsRepo,
+              repos.settingsRepo
             );
             const panel = service.getPanel(threadId);
             await interaction.reply({
@@ -255,7 +295,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.announcementsRepo,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
 
           if (action === "new") {
@@ -303,7 +344,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.eventsRepo,
             repos.rolesRepo,
             repos.seriesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
 
           if (action === "setup") {
@@ -334,7 +376,8 @@ export function registerInteractionCreateListener(client: Client): void {
             interaction.client,
             repos.participantsRepo,
             repos.eventsRepo,
-            repos.rolesRepo
+            repos.rolesRepo,
+            repos.settingsRepo
           );
 
           if (action === "setup") {
@@ -375,7 +418,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.todosRepo,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
 
           if (action === "minutes") {
@@ -474,7 +518,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.eventsRepo,
             repos.rolesRepo,
             repos.seriesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           await service.changeStatus(member, threadId, value);
           await interaction.followUp({
@@ -529,7 +574,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.todosRepo,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           const todo = service.getMinutesCandidate(member, todoId);
           const events = repos.eventsRepo.listOpen(25);
@@ -550,7 +596,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.todosRepo,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           const todo = service.getMinutesCandidate(member, todoId);
           await interaction.showModal(buildMinutesTodoAdoptModal(value, todo));
@@ -579,7 +626,8 @@ export function registerInteractionCreateListener(client: Client): void {
           interaction.client,
           repos.eventsRepo,
           repos.rolesRepo,
-          repos.seriesRepo
+          repos.seriesRepo,
+          repos.settingsRepo
         );
         await service.assignRole(member, threadId, roleType, userId);
         await interaction.followUp({
@@ -592,6 +640,34 @@ export function registerInteractionCreateListener(client: Client): void {
       if (interaction.isModalSubmit()) {
         const [namespace, action, threadId] = interaction.customId.split(":");
         if (!threadId) {
+          return;
+        }
+
+        if (namespace === "admin") {
+          assertOwner(interaction.user.id);
+          await interaction.deferReply({ ephemeral: true });
+          const repos = createRepos(getDb());
+          const idsByAction: Record<string, SettingKey[]> = {
+            "base-submit": ["guildId"],
+            "channels1-submit": ["eventForum", "eventAnnounce", "internalAnnounce", "expenseLog"],
+            "channels2-submit": ["minutes", "freeChat", "meetingVc"],
+            "roles-submit": ["eventLeadRole", "eventerRole"]
+          };
+          const keys = action ? (idsByAction[action] ?? []) : [];
+          if (keys.length === 0) {
+            throw new Error("未知の管理パネル操作です。");
+          }
+
+          const values: Partial<Record<SettingKey, string>> = {};
+          keys.forEach((key: SettingKey) => {
+            values[key] = interaction.fields.getTextInputValue(key);
+          });
+          repos.settingsRepo.setMany(values, Math.floor(Date.now() / 1000));
+          await interaction.editReply({
+            content: "設定を保存しました。",
+            embeds: [buildAdminPanelEmbed(repos.settingsRepo.all())],
+            components: buildAdminPanelComponents()
+          });
           return;
         }
 
@@ -617,7 +693,8 @@ export function registerInteractionCreateListener(client: Client): void {
             interaction.client,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.seriesRepo
+            repos.seriesRepo,
+            repos.settingsRepo
           );
           await service.handover(member, threadId, rawRoleType, newUserId, pendingTasks, reason);
           await interaction.editReply({
@@ -636,7 +713,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.eventsRepo,
             repos.rolesRepo,
             repos.seriesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           const event = await service.setSchedule(member, threadId, scheduledAt);
           await interaction.editReply({
@@ -655,7 +733,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.announcementsRepo,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           const announcement = service.createDraft(member, threadId, body);
           await interaction.editReply({
@@ -679,7 +758,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.announcementsRepo,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           const announcement = service.schedule(member, announcementId, scheduledAt);
           await interaction.editReply({
@@ -718,7 +798,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.eventsRepo,
             repos.rolesRepo,
             repos.seriesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           const schedule = service.setup(member, threadId, {
             notifyChannel,
@@ -756,7 +837,8 @@ export function registerInteractionCreateListener(client: Client): void {
             interaction.client,
             repos.participantsRepo,
             repos.eventsRepo,
-            repos.rolesRepo
+            repos.rolesRepo,
+            repos.settingsRepo
           );
           await service.setup(member, threadId, {
             mode: modeInput,
@@ -788,7 +870,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.expensesRepo,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           const expense = await service.create(member, threadId, {
             category,
@@ -829,7 +912,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.todosRepo,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           const todo = service.create(member, threadId, { content, assignee, dueDate });
           await interaction.editReply({
@@ -855,7 +939,8 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.todosRepo,
             repos.eventsRepo,
             repos.rolesRepo,
-            repos.jobsRepo
+            repos.jobsRepo,
+            repos.settingsRepo
           );
           const todo = service.adoptMinutesCandidate(member, todoId, threadId, {
             content,

@@ -40,7 +40,8 @@ export const eventCommand: CommandModule = {
       repos.eventsRepo,
       repos.rolesRepo,
       repos.seriesRepo,
-      repos.jobsRepo
+      repos.jobsRepo,
+      repos.settingsRepo
     );
 
     const event = await service.createFromCommand(interaction);

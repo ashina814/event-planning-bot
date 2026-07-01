@@ -11,7 +11,8 @@ function createService(client: Client): TodoService {
     repos.todosRepo,
     repos.eventsRepo,
     repos.rolesRepo,
-    repos.jobsRepo
+    repos.jobsRepo,
+    repos.settingsRepo
   );
 }
 

@@ -10,7 +10,8 @@ function createService(client: Client): ParticipantsService {
     client,
     repos.participantsRepo,
     repos.eventsRepo,
-    repos.rolesRepo
+    repos.rolesRepo,
+    repos.settingsRepo
   );
 }
 

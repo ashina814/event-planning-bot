@@ -11,7 +11,8 @@ function createService(client: Client): ExpenseService {
     repos.expensesRepo,
     repos.eventsRepo,
     repos.rolesRepo,
-    repos.jobsRepo
+    repos.jobsRepo,
+    repos.settingsRepo
   );
 }
 

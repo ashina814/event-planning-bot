@@ -2,6 +2,7 @@ import type { Client, GuildMember } from "discord.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SeriesRepo } from "../../db/repos/series.js";
+import type { SettingsRepo } from "../../db/repos/settings.js";
 import {
   assertCanAssignRole,
   assertCanHandover
@@ -17,7 +18,8 @@ export class EventRolesService {
     private readonly client: Client,
     private readonly eventsRepo: EventsRepo,
     private readonly rolesRepo: RolesRepo,
-    private readonly seriesRepo: SeriesRepo
+    private readonly seriesRepo: SeriesRepo,
+    private readonly settingsRepo: SettingsRepo
   ) {}
 
   async assignRole(
@@ -28,7 +30,7 @@ export class EventRolesService {
   ): Promise<void> {
     const event = this.requireEvent(threadId);
     const roles = this.rolesRepo.list(threadId);
-    assertCanAssignRole(member, event, roles, roleType);
+    assertCanAssignRole(member, event, roles, roleType, this.settingsRepo);
 
     const now = unixNow();
     this.rolesRepo.replaceSingle(threadId, roleType, userId, now);
@@ -49,7 +51,7 @@ export class EventRolesService {
   ): Promise<void> {
     const event = this.requireEvent(threadId);
     const roles = this.rolesRepo.list(threadId);
-    assertCanHandover(member, event, roles, roleType);
+    assertCanHandover(member, event, roles, roleType, this.settingsRepo);
 
     const current = this.rolesRepo.getFirst(threadId, roleType);
     const fromUser = current?.user_id ?? member.id;

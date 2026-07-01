@@ -1,10 +1,10 @@
 import { EmbedBuilder } from "discord.js";
-import { config } from "../config.js";
 import { renderMonthCalendar } from "../features/overview/calendar.js";
 import type { OverviewStats } from "../features/overview/service.js";
 import { formatJstDateTime, formatJstTime } from "../lib/time.js";
 import type {
   AnnouncementRecord,
+  BotSettings,
   EventRecord,
   EventRoleRecord,
   ExpenseRecord,
@@ -104,13 +104,55 @@ export function buildHelpEmbed(): EmbedBuilder {
         value: "進行中イベントの一覧を表示します。"
       },
       {
+        name: "/admin",
+        value: "OWNER_ID のユーザーだけが開ける管理パネルです。"
+      },
+      {
         name: "コントロールパネル",
         value: "スレッド内の常駐ボタンから担当変更、状態変更、告知文、タイマー、参加者カウント、ToDo、出費を操作します。"
       }
     );
 }
 
-export function buildEventsListEmbed(events: EventRecord[]): EmbedBuilder {
+function settingLine(label: string, value: string | undefined): string {
+  return `${value ? "✓" : "○"} ${label}: ${value ? `\`${value}\`` : "未設定"}`;
+}
+
+export function buildAdminPanelEmbed(settings: BotSettings): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle("管理パネル")
+    .setDescription("`.env` は DISCORD_TOKEN / CLIENT_ID / OWNER_ID だけにし、Discord 側のIDはここで設定します。")
+    .addFields(
+      {
+        name: "基本",
+        value: [settingLine("Guild ID", settings.guildId)].join("\n"),
+        inline: false
+      },
+      {
+        name: "チャンネル",
+        value: [
+          settingLine("イベントフォーラム", settings.eventForum),
+          settingLine("公式告知", settings.eventAnnounce),
+          settingLine("内部お知らせ", settings.internalAnnounce),
+          settingLine("出費ログ", settings.expenseLog),
+          settingLine("議事録", settings.minutes),
+          settingLine("自由チャット", settings.freeChat),
+          settingLine("会議VC", settings.meetingVc)
+        ].join("\n"),
+        inline: false
+      },
+      {
+        name: "ロール",
+        value: [
+          settingLine("イベント統括", settings.eventLeadRole),
+          settingLine("イベンター", settings.eventerRole)
+        ].join("\n"),
+        inline: false
+      }
+    );
+}
+
+export function buildEventsListEmbed(events: EventRecord[], guildId?: string | null): EmbedBuilder {
   const embed = new EmbedBuilder().setTitle("イベント一覧");
 
   if (events.length === 0) {
@@ -121,7 +163,10 @@ export function buildEventsListEmbed(events: EventRecord[]): EmbedBuilder {
     events
       .map((event) => {
         const scheduled = event.scheduled_at ? formatJstDateTime(event.scheduled_at) : "未定";
-        return `• **${event.title}** / ${statusLabels[event.status]} / ${scheduled}\n  https://discord.com/channels/${config.guildId}/${event.thread_id}`;
+        const location = guildId
+          ? `https://discord.com/channels/${guildId}/${event.thread_id}`
+          : `thread_id=${event.thread_id}`;
+        return `• **${event.title}** / ${statusLabels[event.status]} / ${scheduled}\n  ${location}`;
       })
       .join("\n")
   );

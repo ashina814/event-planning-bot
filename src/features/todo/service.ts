@@ -1,8 +1,8 @@
 import type { Client, GuildMember, Message } from "discord.js";
-import { config } from "../../config.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
+import type { SettingsRepo } from "../../db/repos/settings.js";
 import type { TodosRepo } from "../../db/repos/todos.js";
 import { isEventLead, isEventer } from "../../lib/permission.js";
 import { parseDiscordSnowflake } from "../../lib/parser.js";
@@ -27,7 +27,8 @@ export class TodoService {
     private readonly todosRepo: TodosRepo,
     private readonly eventsRepo: EventsRepo,
     private readonly rolesRepo: RolesRepo,
-    private readonly jobsRepo: JobsRepo
+    private readonly jobsRepo: JobsRepo,
+    private readonly settingsRepo: SettingsRepo
   ) {}
 
   list(threadId: string): TodoRecord[] {
@@ -148,7 +149,7 @@ export class TodoService {
 
   delete(member: GuildMember, todoId: number): void {
     const todo = this.requireTodo(todoId);
-    if (!isEventLead(member) && todo.created_by !== member.id) {
+    if (!isEventLead(member, this.settingsRepo) && todo.created_by !== member.id) {
       throw new TodoPermissionError("ToDo の削除は作成者またはイベント統括のみ可能です。");
     }
     this.todosRepo.delete(todoId);
@@ -172,7 +173,8 @@ export class TodoService {
   }
 
   async handleMinutesMessage(message: Message): Promise<void> {
-    if (!config.channels.minutes || message.channelId !== config.channels.minutes) {
+    const minutesChannel = this.settingsRepo.get("minutes");
+    if (!minutesChannel || message.channelId !== minutesChannel) {
       return;
     }
     if (message.author.bot) {
@@ -203,16 +205,18 @@ export class TodoService {
     });
 
     const pending = this.todosRepo.listPendingMinutesBySource(message.id);
+    const eventLeadRole = this.settingsRepo.get("eventLeadRole");
     const body = [
       `議事録から ToDo 候補を ${pending.length} 件検出しました。`,
-      `<@&${config.roles.eventLead}>`,
+      eventLeadRole ? `<@&${eventLeadRole}>` : "イベント統括",
       `元メッセージ: ${message.url}`,
       "",
       ...pending.map((candidate, index) => `${index + 1}. #${candidate.id} ${candidate.content}`)
     ].join("\n");
 
-    if (config.channels.internalAnnounce) {
-      const channel = await this.client.channels.fetch(config.channels.internalAnnounce);
+    const internalAnnounce = this.settingsRepo.get("internalAnnounce");
+    if (internalAnnounce) {
+      const channel = await this.client.channels.fetch(internalAnnounce);
       if (channel && "send" in channel) {
         await channel.send({
           content: body,
@@ -236,21 +240,21 @@ export class TodoService {
   }
 
   private assertCanAdd(member: GuildMember, threadId: string): void {
-    if (isEventer(member) || this.isAssigned(member.id, threadId)) {
+    if (isEventer(member, this.settingsRepo) || this.isAssigned(member.id, threadId)) {
       return;
     }
     throw new TodoPermissionError("ToDo の追加はイベンターまたは担当者のみ可能です。");
   }
 
   private assertCanReviewMinutes(member: GuildMember): void {
-    if (isEventLead(member)) {
+    if (isEventLead(member, this.settingsRepo)) {
       return;
     }
     throw new TodoPermissionError("議事録 ToDo 候補の振り分けはイベント統括のみ可能です。");
   }
 
   private assertCanTouch(member: GuildMember, todo: TodoRecord): void {
-    if (isEventer(member) || todo.created_by === member.id || todo.assignee === member.id) {
+    if (isEventer(member, this.settingsRepo) || todo.created_by === member.id || todo.assignee === member.id) {
       return;
     }
     throw new TodoPermissionError("この ToDo を操作する権限がありません。");

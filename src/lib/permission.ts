@@ -1,5 +1,5 @@
 import type { ChatInputCommandInteraction, GuildMember, Interaction } from "discord.js";
-import { config } from "../config.js";
+import type { SettingsRepo } from "../db/repos/settings.js";
 import type { EventRecord, EventRoleRecord, RoleType } from "../types/index.js";
 
 export class PermissionError extends Error {
@@ -20,16 +20,22 @@ export function memberHasRole(member: GuildMember, roleId: string): boolean {
   return member.roles.cache.has(roleId);
 }
 
-export function isEventLead(member: GuildMember): boolean {
-  return memberHasRole(member, config.roles.eventLead);
+export function isOwner(userId: string, ownerId: string): boolean {
+  return userId === ownerId;
 }
 
-export function isEventer(member: GuildMember): boolean {
-  return isEventLead(member) || memberHasRole(member, config.roles.eventer);
+export function isEventLead(member: GuildMember, settingsRepo: SettingsRepo): boolean {
+  const roleId = settingsRepo.get("eventLeadRole");
+  return Boolean(roleId && memberHasRole(member, roleId));
 }
 
-export function assertCanCreateEvent(member: GuildMember): void {
-  if (!isEventer(member)) {
+export function isEventer(member: GuildMember, settingsRepo: SettingsRepo): boolean {
+  const roleId = settingsRepo.get("eventerRole");
+  return isEventLead(member, settingsRepo) || Boolean(roleId && memberHasRole(member, roleId));
+}
+
+export function assertCanCreateEvent(member: GuildMember, settingsRepo: SettingsRepo): void {
+  if (!isEventer(member, settingsRepo)) {
     throw new PermissionError("イベント統括またはイベンターのみ作成できます。");
   }
 }
@@ -37,9 +43,10 @@ export function assertCanCreateEvent(member: GuildMember): void {
 export function assertCanManageEvent(
   member: GuildMember,
   event: EventRecord,
-  roles: EventRoleRecord[]
+  roles: EventRoleRecord[],
+  settingsRepo: SettingsRepo
 ): void {
-  if (isEventLead(member)) {
+  if (isEventLead(member, settingsRepo)) {
     return;
   }
 
@@ -57,25 +64,27 @@ export function assertCanAssignRole(
   member: GuildMember,
   event: EventRecord,
   roles: EventRoleRecord[],
-  roleType: RoleType
+  roleType: RoleType,
+  settingsRepo: SettingsRepo
 ): void {
   if (roleType === "main") {
-    if (!isEventLead(member)) {
+    if (!isEventLead(member, settingsRepo)) {
       throw new PermissionError("主担当の設定はイベント統括のみ可能です。");
     }
     return;
   }
 
-  assertCanManageEvent(member, event, roles);
+  assertCanManageEvent(member, event, roles, settingsRepo);
 }
 
 export function assertCanHandover(
   member: GuildMember,
   event: EventRecord,
   roles: EventRoleRecord[],
-  roleType: RoleType
+  roleType: RoleType,
+  settingsRepo: SettingsRepo
 ): void {
-  if (isEventLead(member)) {
+  if (isEventLead(member, settingsRepo)) {
     return;
   }
 
@@ -84,5 +93,5 @@ export function assertCanHandover(
     return;
   }
 
-  assertCanManageEvent(member, event, roles);
+  assertCanManageEvent(member, event, roles, settingsRepo);
 }

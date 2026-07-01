@@ -4,7 +4,7 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from "discord.js";
-import type { TodoRecord } from "../types/index.js";
+import type { BotSettings, TodoRecord } from "../types/index.js";
 
 export function buildHandoverModal(threadId: string): ModalBuilder {
   return new ModalBuilder()
@@ -58,6 +58,80 @@ export function buildEventScheduleModal(threadId: string): ModalBuilder {
           .setPlaceholder("2026-07-01 22:00")
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
+      )
+    );
+}
+
+function settingInput(customId: string, label: string, value: string | undefined, required = false): TextInputBuilder {
+  const input = new TextInputBuilder()
+    .setCustomId(customId)
+    .setLabel(label)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(required);
+  if (value) {
+    input.setValue(value);
+  }
+  return input;
+}
+
+export function buildAdminBaseModal(settings: BotSettings): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId("admin:base-submit:panel")
+    .setTitle("管理パネル 基本")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("guildId", "Guild ID", settings.guildId, true)
+      )
+    );
+}
+
+export function buildAdminChannels1Modal(settings: BotSettings): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId("admin:channels1-submit:panel")
+    .setTitle("管理パネル チャンネル1")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("eventForum", "イベントフォーラム", settings.eventForum, true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("eventAnnounce", "公式告知", settings.eventAnnounce)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("internalAnnounce", "内部お知らせ", settings.internalAnnounce)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("expenseLog", "出費ログ", settings.expenseLog)
+      )
+    );
+}
+
+export function buildAdminChannels2Modal(settings: BotSettings): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId("admin:channels2-submit:panel")
+    .setTitle("管理パネル チャンネル2")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("minutes", "議事録", settings.minutes)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("freeChat", "自由チャット", settings.freeChat)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("meetingVc", "会議VC", settings.meetingVc)
+      )
+    );
+}
+
+export function buildAdminRolesModal(settings: BotSettings): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId("admin:roles-submit:panel")
+    .setTitle("管理パネル ロール")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("eventLeadRole", "イベント統括ロール", settings.eventLeadRole, true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("eventerRole", "イベンターロール", settings.eventerRole, true)
       )
     );
 }

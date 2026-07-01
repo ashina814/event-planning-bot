@@ -3,6 +3,7 @@ import type { EventsRepo } from "../../db/repos/events.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SeriesRepo } from "../../db/repos/series.js";
+import type { SettingsRepo } from "../../db/repos/settings.js";
 import type { TimersRepo } from "../../db/repos/timers.js";
 import { isEventLead } from "../../lib/permission.js";
 import {
@@ -42,7 +43,8 @@ export class TimekeeperService {
     private readonly eventsRepo: EventsRepo,
     private readonly rolesRepo: RolesRepo,
     private readonly seriesRepo: SeriesRepo,
-    private readonly jobsRepo: JobsRepo
+    private readonly jobsRepo: JobsRepo,
+    private readonly settingsRepo: SettingsRepo
   ) {}
 
   getLatest(threadId: string): {
@@ -272,7 +274,7 @@ export class TimekeeperService {
   }
 
   private assertCanOperate(member: GuildMember, roles: EventRoleRecord[]): void {
-    if (isEventLead(member)) {
+    if (isEventLead(member, this.settingsRepo)) {
       return;
     }
 

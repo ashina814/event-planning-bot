@@ -5,11 +5,11 @@ import {
   type GuildMember,
   type TextBasedChannel
 } from "discord.js";
-import { config } from "../../config.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SeriesRepo } from "../../db/repos/series.js";
+import type { SettingsRepo } from "../../db/repos/settings.js";
 import { assertCanCreateEvent, assertCanManageEvent, fetchGuildMember } from "../../lib/permission.js";
 import { titleWithStatusPrefix } from "../../lib/parser.js";
 import { formatJstDateTime, jstDateTimeToUnix, unixNow } from "../../lib/time.js";
@@ -29,21 +29,23 @@ export class EventLifecycleService {
     private readonly eventsRepo: EventsRepo,
     private readonly rolesRepo: RolesRepo,
     private readonly seriesRepo: SeriesRepo,
-    private readonly jobsRepo: JobsRepo
+    private readonly jobsRepo: JobsRepo,
+    private readonly settingsRepo: SettingsRepo
   ) {}
 
   async createFromCommand(interaction: ChatInputCommandInteraction): Promise<EventRecord> {
     const member = await fetchGuildMember(interaction);
-    assertCanCreateEvent(member);
+    assertCanCreateEvent(member, this.settingsRepo);
 
     const title = interaction.options.getString("title", true).trim();
     const seriesInput = interaction.options.getString("series")?.trim();
     const now = unixNow();
     const series = seriesInput ? this.seriesRepo.findOrCreate(seriesInput, now) : null;
 
-    const forum = await this.client.channels.fetch(config.channels.eventForum);
+    const eventForum = this.settingsRepo.require("eventForum", "イベントフォーラム");
+    const forum = await this.client.channels.fetch(eventForum);
     if (!forum || forum.type !== ChannelType.GuildForum) {
-      throw new Error("CH_EVENT_FORUM は Discord フォーラムチャンネル ID を指定してください。");
+      throw new Error("/admin でイベントフォーラムに Discord フォーラムチャンネル ID を設定してください。");
     }
 
     const starterContent = buildParentPost(
@@ -95,7 +97,7 @@ export class EventLifecycleService {
   ): Promise<EventRecord> {
     const event = this.requireEvent(threadId);
     const roles = this.rolesRepo.list(threadId);
-    assertCanManageEvent(member, event, roles);
+    assertCanManageEvent(member, event, roles, this.settingsRepo);
 
     const transitions = allowedStatusTransitions(event.status);
     if (!transitions.includes(nextStatus)) {
@@ -118,7 +120,7 @@ export class EventLifecycleService {
   async setSchedule(member: GuildMember, threadId: string, input: string): Promise<EventRecord> {
     const event = this.requireEvent(threadId);
     const roles = this.rolesRepo.list(threadId);
-    assertCanManageEvent(member, event, roles);
+    assertCanManageEvent(member, event, roles, this.settingsRepo);
 
     const scheduledAt = jstDateTimeToUnix(input.trim());
     const now = unixNow();
@@ -160,7 +162,12 @@ export class EventLifecycleService {
     }
 
     const main = this.rolesRepo.getFirst(threadId, "main");
-    const mention = main ? `<@${main.user_id}>` : `<@&${config.roles.eventLead}>`;
+    const eventLeadRole = this.settingsRepo.get("eventLeadRole");
+    const mention = main
+      ? `<@${main.user_id}>`
+      : eventLeadRole
+        ? `<@&${eventLeadRole}>`
+        : "イベント統括";
     await channel.send({
       content: [
         `📝 振り返りの時間です ${mention}`,

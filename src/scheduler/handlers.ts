@@ -5,6 +5,7 @@ import type { ExpensesRepo } from "../db/repos/expenses.js";
 import type { JobsRepo } from "../db/repos/jobs.js";
 import type { RolesRepo } from "../db/repos/roles.js";
 import type { SeriesRepo } from "../db/repos/series.js";
+import type { SettingsRepo } from "../db/repos/settings.js";
 import type { TimersRepo } from "../db/repos/timers.js";
 import type { TodosRepo } from "../db/repos/todos.js";
 import { logger } from "../lib/logger.js";
@@ -24,6 +25,7 @@ interface SchedulerDeps {
   timersRepo: TimersRepo;
   todosRepo: TodosRepo;
   expensesRepo: ExpensesRepo;
+  settingsRepo: SettingsRepo;
   jobsRepo: JobsRepo;
 }
 
@@ -42,7 +44,8 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.eventsRepo,
         deps.rolesRepo,
         deps.seriesRepo,
-        deps.jobsRepo
+        deps.jobsRepo,
+        deps.settingsRepo
       );
       await service.autoProgress(threadId, scheduledAt);
       return;
@@ -59,7 +62,8 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.announcementsRepo,
         deps.eventsRepo,
         deps.rolesRepo,
-        deps.jobsRepo
+        deps.jobsRepo,
+        deps.settingsRepo
       );
       await service.postFromJob(announcementId, channelId, scheduledAt);
       return;
@@ -78,7 +82,8 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.eventsRepo,
         deps.rolesRepo,
         deps.seriesRepo,
-        deps.jobsRepo
+        deps.jobsRepo,
+        deps.settingsRepo
       );
       await service.notifySection(
         scheduleId,
@@ -98,7 +103,8 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.todosRepo,
         deps.eventsRepo,
         deps.rolesRepo,
-        deps.jobsRepo
+        deps.jobsRepo,
+        deps.settingsRepo
       );
       await service.handleDueReminder(todoId);
       return;
@@ -113,7 +119,8 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.expensesRepo,
         deps.eventsRepo,
         deps.rolesRepo,
-        deps.jobsRepo
+        deps.jobsRepo,
+        deps.settingsRepo
       );
       await service.handleProofTimeout(expenseId);
       return;
@@ -129,7 +136,8 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.eventsRepo,
         deps.rolesRepo,
         deps.seriesRepo,
-        deps.jobsRepo
+        deps.jobsRepo,
+        deps.settingsRepo
       );
       await service.handleRetrospectiveReminder(threadId, scheduledAt);
       return;

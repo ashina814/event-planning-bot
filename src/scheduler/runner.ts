@@ -5,6 +5,7 @@ import type { ExpensesRepo } from "../db/repos/expenses.js";
 import type { JobsRepo } from "../db/repos/jobs.js";
 import type { RolesRepo } from "../db/repos/roles.js";
 import type { SeriesRepo } from "../db/repos/series.js";
+import type { SettingsRepo } from "../db/repos/settings.js";
 import type { TimersRepo } from "../db/repos/timers.js";
 import type { TodosRepo } from "../db/repos/todos.js";
 import { logger } from "../lib/logger.js";
@@ -24,7 +25,8 @@ export class SchedulerRunner {
     private readonly seriesRepo: SeriesRepo,
     private readonly timersRepo: TimersRepo,
     private readonly todosRepo: TodosRepo,
-    private readonly expensesRepo: ExpensesRepo
+    private readonly expensesRepo: ExpensesRepo,
+    private readonly settingsRepo: SettingsRepo
   ) {}
 
   start(): void {
@@ -66,6 +68,7 @@ export class SchedulerRunner {
             timersRepo: this.timersRepo,
             todosRepo: this.todosRepo,
             expensesRepo: this.expensesRepo,
+            settingsRepo: this.settingsRepo,
             jobsRepo: this.jobsRepo
           });
           this.jobsRepo.markFired(job.id, unixNow());

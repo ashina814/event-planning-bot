@@ -11,6 +11,7 @@ import type {
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { ParticipantsRepo } from "../../db/repos/participants.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
+import type { SettingsRepo } from "../../db/repos/settings.js";
 import { parseDiscordSnowflake } from "../../lib/parser.js";
 import { jstDateTimeToUnix, unixNow } from "../../lib/time.js";
 import { isEventLead } from "../../lib/permission.js";
@@ -39,7 +40,8 @@ export class ParticipantsService {
     private readonly client: Client,
     private readonly participantsRepo: ParticipantsRepo,
     private readonly eventsRepo: EventsRepo,
-    private readonly rolesRepo: RolesRepo
+    private readonly rolesRepo: RolesRepo,
+    private readonly settingsRepo: SettingsRepo
   ) {}
 
   getPanel(threadId: string): {
@@ -300,7 +302,7 @@ export class ParticipantsService {
   }
 
   private assertCanConfigure(member: GuildMember, roles: EventRoleRecord[]): void {
-    if (isEventLead(member)) {
+    if (isEventLead(member, this.settingsRepo)) {
       return;
     }
 

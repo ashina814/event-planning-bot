@@ -23,7 +23,8 @@ const scheduler = new SchedulerRunner(
   repos.seriesRepo,
   repos.timersRepo,
   repos.todosRepo,
-  repos.expensesRepo
+  repos.expensesRepo,
+  repos.settingsRepo
 );
 
 registerReadyListener(client, scheduler);

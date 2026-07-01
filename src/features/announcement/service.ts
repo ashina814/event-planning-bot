@@ -1,9 +1,9 @@
 import { type Client, type GuildMember } from "discord.js";
-import { config } from "../../config.js";
 import type { AnnouncementsRepo } from "../../db/repos/announcements.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
+import type { SettingsRepo } from "../../db/repos/settings.js";
 import { isEventLead } from "../../lib/permission.js";
 import { jstDateTimeToUnix, unixNow } from "../../lib/time.js";
 import type { AnnouncementRecord, EventRecord, EventRoleRecord } from "../../types/index.js";
@@ -18,7 +18,8 @@ export class AnnouncementService {
     private readonly announcementsRepo: AnnouncementsRepo,
     private readonly eventsRepo: EventsRepo,
     private readonly rolesRepo: RolesRepo,
-    private readonly jobsRepo: JobsRepo
+    private readonly jobsRepo: JobsRepo,
+    private readonly settingsRepo: SettingsRepo
   ) {}
 
   list(threadId: string): AnnouncementRecord[] {
@@ -70,7 +71,7 @@ export class AnnouncementService {
       kind: "announcement_post",
       payload: {
         announcementId: announcement.id,
-        channelId: config.channels.eventAnnounce,
+        channelId: this.settingsRepo.require("eventAnnounce", "公式告知チャンネル"),
         scheduledAt: fireAt
       },
       fireAt,
@@ -99,20 +100,21 @@ export class AnnouncementService {
 
   private async postAnnouncement(
     announcementId: number,
-    channelId = config.channels.eventAnnounce
+    channelId?: string
   ): Promise<AnnouncementRecord> {
     const announcement = this.requireAnnouncement(announcementId);
     if (announcement.posted_msg_id) {
       return announcement;
     }
 
-    if (!channelId) {
-      throw new Error("CH_EVENT_ANNOUNCE が未設定です。");
+    const targetChannelId = channelId ?? this.settingsRepo.require("eventAnnounce", "公式告知チャンネル");
+    if (!targetChannelId) {
+      throw new Error("公式告知チャンネルが未設定です。/admin の管理パネルで設定してください。");
     }
 
-    const channel = await this.client.channels.fetch(channelId);
+    const channel = await this.client.channels.fetch(targetChannelId);
     if (!channel || !("send" in channel)) {
-      throw new Error("CH_EVENT_ANNOUNCE はテキストチャンネル ID を指定してください。");
+      throw new Error("公式告知チャンネルはテキストチャンネル ID を指定してください。");
     }
 
     const sent = await channel.send({ content: announcement.body });
@@ -142,7 +144,7 @@ export class AnnouncementService {
     _event: EventRecord,
     roles: EventRoleRecord[]
   ): void {
-    if (isEventLead(member)) {
+    if (isEventLead(member, this.settingsRepo)) {
       return;
     }
 
@@ -157,7 +159,7 @@ export class AnnouncementService {
   }
 
   private assertCanPost(member: GuildMember): void {
-    if (!isEventLead(member)) {
+    if (!isEventLead(member, this.settingsRepo)) {
       throw new AnnouncementPermissionError("公式告知チャンネルへの転送・予約はイベント統括のみ可能です。");
     }
   }
