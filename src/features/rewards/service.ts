@@ -2,9 +2,11 @@ import type Database from "better-sqlite3";
 import type { Client } from "discord.js";
 import { config } from "../../config.js";
 import type { EventsRepo } from "../../db/repos/events.js";
+import { roleLabel } from "../../db/repos/roles.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
 import { logAudit } from "../../lib/audit.js";
 import { formatJstPlainDate, unixNow } from "../../lib/time.js";
+import type { EventRecord, EventRoleRecord } from "../../types/index.js";
 import { buildLeadDashboardComponents } from "../../ui/buttons.js";
 import {
   defaultBaseSalaryGrades,
@@ -43,6 +45,20 @@ export interface MiscContributionRecord {
   note: string | null;
   created_by: string;
   created_at: number;
+}
+
+export interface EarningRecord {
+  id: number;
+  user_id: string;
+  thread_id: string | null;
+  source: string;
+  role_label: string;
+  base_amount: number;
+  multiplier: number;
+  amount: number;
+  month_key: string;
+  created_at: number;
+  voided: number;
 }
 
 export interface RewardSettingsSummary {
@@ -251,6 +267,17 @@ export class RewardsService {
       )
       .run(input.userId, input.roleLabel, input.threadId, monthKey, input.note, input.actorId, now);
     const contribution = this.getContribution(Number(result.lastInsertRowid));
+    this.insertEarning({
+      userId: input.userId,
+      threadId: input.threadId,
+      source: "misc",
+      roleLabel: input.roleLabel,
+      baseAmount: reward.amount,
+      multiplier: 1,
+      amount: reward.amount,
+      monthKey,
+      now
+    });
     logAudit({
       actorId: input.actorId,
       action: "misc_contribution.create",
@@ -263,6 +290,18 @@ export class RewardsService {
 
   deleteMiscContribution(actorId: string, id: number): void {
     const before = this.getContribution(id);
+    this.db
+      .prepare(
+        `UPDATE earnings
+         SET voided = 1
+         WHERE source = 'misc'
+           AND user_id = ?
+           AND role_label = ?
+           AND month_key = ?
+           AND created_at = ?
+           AND voided = 0`
+      )
+      .run(before.user_id, before.role_label, before.month_key, before.created_at);
     this.db.prepare("DELETE FROM misc_contributions WHERE id = ?").run(id);
     logAudit({
       actorId,
@@ -277,6 +316,73 @@ export class RewardsService {
     return this.db
       .prepare("SELECT * FROM misc_contributions ORDER BY created_at DESC, id DESC LIMIT ?")
       .all(limit) as MiscContributionRecord[];
+  }
+
+  snapshotEventEarnings(actorId: string, event: EventRecord, roles: EventRoleRecord[]): {
+    created: EarningRecord[];
+    missing: string[];
+  } {
+    const now = unixNow();
+    const monthKey = formatJstPlainDate(now).slice(0, 7);
+    const multipliers = this.getScaleMultipliers();
+    const multiplier = multipliers[event.scale] ?? 1;
+    const created: EarningRecord[] = [];
+    const missing: string[] = [];
+
+    for (const role of roles) {
+      const label = roleLabel(role);
+      const reward = this.findRoleReward(label);
+      if (!reward || reward.enabled !== 1) {
+        missing.push(label);
+        continue;
+      }
+      const amount = Math.round(reward.amount * multiplier);
+      created.push(
+        this.insertEarning({
+          userId: role.user_id,
+          threadId: event.thread_id,
+          source: "event_role",
+          roleLabel: label,
+          baseAmount: reward.amount,
+          multiplier,
+          amount,
+          monthKey,
+          now
+        })
+      );
+    }
+
+    logAudit({
+      actorId,
+      action: "earnings.snapshot",
+      targetType: "event",
+      targetId: event.thread_id,
+      after: { earnings: created, missing }
+    });
+    return { created, missing };
+  }
+
+  voidEventEarnings(actorId: string, threadId: string): number {
+    const before = this.db
+      .prepare("SELECT * FROM earnings WHERE source = 'event_role' AND thread_id = ? AND voided = 0")
+      .all(threadId) as EarningRecord[];
+    const result = this.db
+      .prepare("UPDATE earnings SET voided = 1 WHERE source = 'event_role' AND thread_id = ? AND voided = 0")
+      .run(threadId);
+    logAudit({
+      actorId,
+      action: "earnings.void",
+      targetType: "event",
+      targetId: threadId,
+      before
+    });
+    return result.changes;
+  }
+
+  listEarnings(monthKey: string): EarningRecord[] {
+    return this.db
+      .prepare("SELECT * FROM earnings WHERE month_key = ? ORDER BY user_id ASC, created_at ASC")
+      .all(monthKey) as EarningRecord[];
   }
 
   async ensureLeadDashboard(client: Client): Promise<void> {
@@ -349,6 +455,38 @@ export class RewardsService {
       throw new Error("貢献記録が見つかりませんでした。");
     }
     return row;
+  }
+
+  private insertEarning(input: {
+    userId: string;
+    threadId: string | null;
+    source: string;
+    roleLabel: string;
+    baseAmount: number;
+    multiplier: number;
+    amount: number;
+    monthKey: string;
+    now: number;
+  }): EarningRecord {
+    const result = this.db
+      .prepare(
+        `INSERT INTO earnings (
+          user_id, thread_id, source, role_label, base_amount, multiplier,
+          amount, month_key, created_at, voided
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+      )
+      .run(
+        input.userId,
+        input.threadId,
+        input.source,
+        input.roleLabel,
+        input.baseAmount,
+        input.multiplier,
+        input.amount,
+        input.monthKey,
+        input.now
+      );
+    return this.db.prepare("SELECT * FROM earnings WHERE id = ?").get(Number(result.lastInsertRowid)) as EarningRecord;
   }
 
   private getSettingOptional(key: string): string | null {

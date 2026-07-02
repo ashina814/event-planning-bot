@@ -38,6 +38,7 @@ import type {
   MiscContributionRecord,
   RoleRewardRecord
 } from "../features/rewards/service.js";
+import type { PayrollItemRecord, PayrollRunRecord } from "../features/payroll/service.js";
 import { mainRoleKey, roleKeyFor, roleLabel } from "../db/repos/roles.js";
 import { formatJstDateTime } from "../lib/time.js";
 
@@ -1318,6 +1319,11 @@ export function buildLeadDashboardComponents(): ActionRowBuilder<ButtonBuilder>[
         .setLabel("支給設定")
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
+        .setCustomId("payroll:dashboard:panel")
+        .setEmoji("📊")
+        .setLabel("支給案")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
         .setCustomId("reward:contribution-list:panel")
         .setLabel("貢献一覧")
         .setStyle(ButtonStyle.Secondary)
@@ -1514,6 +1520,58 @@ export function buildContributionDeleteSelect(contributions: MiscContributionRec
             description: `<@${item.user_id}> / ${item.month_key}`.slice(0, 100)
           }))
         )
+    )
+  ];
+}
+
+export function buildPayrollRunComponents(
+  run: PayrollRunRecord,
+  items: PayrollItemRecord[],
+  page: number
+): Array<ActionRowBuilder<ButtonBuilder> | ActionRowBuilder<UserSelectMenuBuilder>> {
+  const maxPage = Math.max(0, Math.ceil(items.length / 8) - 1);
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`payroll:page:${run.id}:${Math.max(0, page - 1)}`)
+        .setLabel("前へ")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page <= 0),
+      new ButtonBuilder()
+        .setCustomId(`payroll:page:${run.id}:${Math.min(maxPage, page + 1)}`)
+        .setLabel("次へ")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page >= maxPage),
+      new ButtonBuilder()
+        .setCustomId(`payroll:finalize:${run.id}`)
+        .setLabel("確定")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(run.status === "finalized")
+    ),
+    new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+      new UserSelectMenuBuilder()
+        .setCustomId(`payroll:item-user:${run.id}`)
+        .setPlaceholder("個人明細を見る")
+        .setMinValues(1)
+        .setMaxValues(1)
+    )
+  ];
+}
+
+export function buildPayrollItemComponents(runId: number, item: PayrollItemRecord): ActionRowBuilder<ButtonBuilder>[] {
+  if (item.cap_action !== "unresolved") {
+    return [];
+  }
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`payroll:cap:${runId}:${item.user_id}:trim`)
+        .setLabel("上限で切る")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`payroll:cap:${runId}:${item.user_id}:keep`)
+        .setLabel("超過のまま")
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }

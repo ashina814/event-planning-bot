@@ -10,17 +10,22 @@ import type { SettingsRepo } from "../db/repos/settings.js";
 import type { TimersRepo } from "../db/repos/timers.js";
 import type { TodosRepo } from "../db/repos/todos.js";
 import { config } from "../config.js";
+import { getDb } from "../db/connection.js";
 import { logger } from "../lib/logger.js";
 import { formatJstDate, unixNow } from "../lib/time.js";
 import { AnnouncementService } from "../features/announcement/service.js";
 import { EventLifecycleService } from "../features/event-lifecycle/service.js";
 import { syncEventArtifacts } from "../features/event-lifecycle/sync.js";
 import { ExpenseService } from "../features/expense/service.js";
+import { buildPayrollRunEmbed } from "../features/payroll/embeds.js";
+import { PayrollService } from "../features/payroll/service.js";
 import { ParticipantsService } from "../features/participants/service.js";
 import { EventRolesService } from "../features/roles/service.js";
 import { TimekeeperService } from "../features/timekeeper/service.js";
 import { TodoService } from "../features/todo/service.js";
 import type { AnnouncementRecord, ReactionEmojiConfig, ScheduledJobRecord } from "../types/index.js";
+import { buildPayrollRunComponents } from "../ui/buttons.js";
+import { nextMonthFirstTenJst } from "./runner.js";
 
 interface SchedulerDeps {
   client: Client;
@@ -178,6 +183,31 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         kind: "stale_event_check",
         payload: {},
         fireAt: nextMondayTenJst(now),
+        now
+      });
+      return;
+    }
+    case "payroll_draft": {
+      const service = new PayrollService(getDb());
+      const monthKey = service.defaultMonthKey();
+      const run = service.generateDraft("system", monthKey);
+      const items = service.listItems(run.id);
+      const channelId = deps.settingsRepo.getOptional("leadOnly");
+      if (channelId) {
+        const channel = await deps.client.channels.fetch(channelId).catch(() => null);
+        if (channel && "send" in channel) {
+          await channel.send({
+            content: `${monthKey} の支給案を作成しました。`,
+            embeds: [buildPayrollRunEmbed(run, items, 0)],
+            components: buildPayrollRunComponents(run, items, 0)
+          });
+        }
+      }
+      const now = unixNow();
+      deps.jobsRepo.create({
+        kind: "payroll_draft",
+        payload: {},
+        fireAt: nextMonthFirstTenJst(now),
         now
       });
       return;

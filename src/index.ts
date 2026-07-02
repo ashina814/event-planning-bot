@@ -37,6 +37,7 @@ registerExpenseListeners(client);
 
 client.once(Events.ClientReady, () => {
   scheduler.ensureStaleEventCheckScheduled();
+  scheduler.ensurePayrollDraftScheduled();
   const rewards = new RewardsService(db, repos.settingsRepo, repos.eventsRepo);
   void rewards.ensureLeadDashboard(client);
   void reportOrphanEventThreads();

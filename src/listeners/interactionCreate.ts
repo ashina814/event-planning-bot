@@ -39,6 +39,8 @@ import {
 } from "../features/help/index.js";
 import { OverviewService } from "../features/overview/service.js";
 import { ParticipantsService } from "../features/participants/service.js";
+import { buildPayrollItemEmbed, buildPayrollRunEmbed } from "../features/payroll/embeds.js";
+import { PayrollService } from "../features/payroll/service.js";
 import { RewardsService, type RewardSettingsSummary } from "../features/rewards/service.js";
 import { EventRolesService } from "../features/roles/service.js";
 import { TodoService } from "../features/todo/service.js";
@@ -102,6 +104,8 @@ import {
   buildParticipantsPanelComponents,
   buildRoleTypeSelect,
   buildRoleUserSelect,
+  buildPayrollItemComponents,
+  buildPayrollRunComponents,
   buildRewardGradeChoiceSelect,
   buildRewardGradeSelect,
   buildRewardRoleSelect,
@@ -734,6 +738,69 @@ export function registerInteractionCreateListener(client: Client): void {
               content: lines.length > 0 ? ["貢献記録", ...lines].join("\n") : "貢献記録はまだありません。",
               components: canDelete ? buildContributionDeleteSelect(contributions) : [],
               ephemeral: true
+            });
+            return;
+          }
+        }
+
+        if (namespace === "payroll") {
+          const member = await fetchGuildMember(interaction);
+          const service = new PayrollService(getDb());
+
+          if (action === "dashboard") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const monthKey = service.defaultMonthKey();
+            const run = service.generateDraft(interaction.user.id, monthKey);
+            const items = service.listItems(run.id);
+            await interaction.reply({
+              embeds: [buildPayrollRunEmbed(run, items, 0)],
+              components: buildPayrollRunComponents(run, items, 0),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "page") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const runId = Number(threadId);
+            const page = Math.max(0, Number(parts[3] ?? 0));
+            const run = service.getRun(runId);
+            const items = service.listItems(run.id);
+            await interaction.update({
+              embeds: [buildPayrollRunEmbed(run, items, page)],
+              components: buildPayrollRunComponents(run, items, page)
+            });
+            return;
+          }
+
+          if (action === "cap") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const runId = Number(threadId);
+            const userId = parts[3];
+            const capAction = parts[4];
+            if (!userId || (capAction !== "trim" && capAction !== "keep")) {
+              throw new Error("上限処理の指定が不正です。");
+            }
+            const item = service.resolveCap(interaction.user.id, runId, userId, capAction);
+            const run = service.getRun(runId);
+            await interaction.update({
+              embeds: [buildPayrollItemEmbed(run, item)],
+              components: buildPayrollItemComponents(runId, item)
+            });
+            return;
+          }
+
+          if (action === "finalize") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const run = service.finalize(interaction.user.id, Number(threadId));
+            const items = service.listItems(run.id);
+            await interaction.update({
+              embeds: [buildPayrollRunEmbed(run, items, 0)],
+              components: buildPayrollRunComponents(run, items, 0)
             });
             return;
           }
@@ -2362,6 +2429,29 @@ export function registerInteractionCreateListener(client: Client): void {
           await interaction.update({
             content: "紐付けるイベントを選んでください。不要ならイベントなしで進めます。",
             components: buildContributionEventSelect(repos.eventsRepo.listOpen(25))
+          });
+          return;
+        }
+
+        if (namespace === "payroll" && action === "item-user" && threadId) {
+          const userId = interaction.values[0];
+          if (!userId) {
+            return;
+          }
+          const repos = createRepos(getDb());
+          const member = await fetchGuildMember(interaction);
+          if (interaction.user.id !== config.ownerId) {
+            assertLeadOrSub(member, repos.settingsRepo);
+          }
+          const service = new PayrollService(getDb());
+          const run = service.getRun(Number(threadId));
+          const item = service.listItems(run.id).find((candidate) => candidate.user_id === userId);
+          if (!item) {
+            throw new Error("このユーザーの支給明細はありません。");
+          }
+          await interaction.update({
+            embeds: [buildPayrollItemEmbed(run, item)],
+            components: buildPayrollItemComponents(run.id, item)
           });
           return;
         }

@@ -129,6 +129,16 @@ function runMigrations(db: Database.Database): void {
       continue;
     }
 
+    if (
+      name === "009_d3_payroll.sql" &&
+      hasTable(db, "earnings") &&
+      hasTable(db, "payroll_runs") &&
+      hasTable(db, "payroll_items")
+    ) {
+      markMigrationApplied(db, name);
+      continue;
+    }
+
     const sql = readFileSync(resolve(migrationsDir, name), "utf8");
     const tx = db.transaction(() => {
       db.exec(sql);

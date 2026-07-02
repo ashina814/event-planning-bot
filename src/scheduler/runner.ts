@@ -56,6 +56,19 @@ export class SchedulerRunner {
     });
   }
 
+  ensurePayrollDraftScheduled(): void {
+    if (this.jobsRepo.hasPendingKind("payroll_draft")) {
+      return;
+    }
+    const now = unixNow();
+    this.jobsRepo.create({
+      kind: "payroll_draft",
+      payload: {},
+      fireAt: nextMonthFirstTenJst(now),
+      now
+    });
+  }
+
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
@@ -125,5 +138,21 @@ export function nextMondayTenJst(now: number): number {
     ) / 1000;
   }
 
+  return candidate;
+}
+
+export function nextMonthFirstTenJst(now: number): number {
+  const jst = new Date((now + 9 * 60 * 60) * 1000);
+  let year = jst.getUTCFullYear();
+  let month = jst.getUTCMonth();
+  let candidate = Date.UTC(year, month, 1, 1, 0, 0) / 1000;
+  if (candidate <= now) {
+    month += 1;
+    if (month > 11) {
+      month = 0;
+      year += 1;
+    }
+    candidate = Date.UTC(year, month, 1, 1, 0, 0) / 1000;
+  }
   return candidate;
 }

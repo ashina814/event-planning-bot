@@ -5,6 +5,7 @@ import {
   type GuildMember,
   type TextBasedChannel
 } from "discord.js";
+import { getDb } from "../../db/connection.js";
 import type { EventsRepo } from "../../db/repos/events.js";
 import type { JobsRepo } from "../../db/repos/jobs.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
@@ -25,6 +26,7 @@ import type { EventRecord, EventScale, EventStatus } from "../../types/index.js"
 import { allowedStatusTransitions } from "../../ui/buttons.js";
 import { buildParentPost } from "../../ui/embeds.js";
 import { statusLabels } from "../../ui/labels.js";
+import { RewardsService } from "../rewards/service.js";
 import { syncEventArtifacts } from "./sync.js";
 
 function truncateDiscordName(name: string): string {
@@ -125,6 +127,9 @@ export class EventLifecycleService {
 
     const now = unixNow();
     this.eventsRepo.updateStatus(threadId, nextStatus, now);
+    if (event.status === "done") {
+      new RewardsService(getDb(), this.settingsRepo, this.eventsRepo).voidEventEarnings(member.id, threadId);
+    }
     logAudit({
       actorId: member.id,
       action: "event.status_change",
@@ -143,6 +148,24 @@ export class EventLifecycleService {
     if (nextStatus === "announced" || nextStatus === "in_progress") {
       this.jobsRepo.cancelJobsByThread(threadId, [...eventRescheduleJobKinds]);
       this.scheduleEventJobs(this.requireEvent(threadId), now);
+    }
+    if (nextStatus === "done") {
+      const snapshot = new RewardsService(getDb(), this.settingsRepo, this.eventsRepo)
+        .snapshotEventEarnings(member.id, this.requireEvent(threadId), roles);
+      const total = snapshot.created.reduce((sum, earning) => sum + earning.amount, 0);
+      await this.postToThread(
+        threadId,
+        [
+          "支給対象を確定しました。",
+          `件数: ${snapshot.created.length}`,
+          `合計: ${total.toLocaleString("ja-JP")} Land`
+        ].join("\n")
+      );
+      if (snapshot.missing.length > 0) {
+        await this.postToLeadOnly(
+          `単価未設定の担当があります: ${event.title}\n${snapshot.missing.map((label) => `- ${label}`).join("\n")}`
+        );
+      }
     }
     await this.renameThread(threadId, nextStatus, event.title);
     await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
@@ -384,6 +407,17 @@ export class EventLifecycleService {
 
   private async postToThread(threadId: string, content: string): Promise<void> {
     const channel = await this.client.channels.fetch(threadId).catch(() => null);
+    if (channel && "send" in channel) {
+      await channel.send({ content });
+    }
+  }
+
+  private async postToLeadOnly(content: string): Promise<void> {
+    const channelId = this.settingsRepo.getOptional("leadOnly");
+    if (!channelId) {
+      return;
+    }
+    const channel = await this.client.channels.fetch(channelId).catch(() => null);
     if (channel && "send" in channel) {
       await channel.send({ content });
     }
