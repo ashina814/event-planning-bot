@@ -1334,7 +1334,57 @@ export function buildLeadDashboardComponents(): ActionRowBuilder<ButtonBuilder>[
         .setCustomId("bonus:panel:panel")
         .setEmoji("🎖")
         .setLabel("特別貢献")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("report:open:default")
+        .setEmoji("📈")
+        .setLabel("月次レポート")
         .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildSelfReviewPanelComponents(monthKey: string): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`selfreview:open:${monthKey}`)
+        .setEmoji("📝")
+        .setLabel("提出する")
+        .setStyle(ButtonStyle.Primary)
+    )
+  ];
+}
+
+export function buildSelfReviewContinueComponents(monthKey: string): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`selfreview:continue:${monthKey}`)
+        .setLabel("続きを入力")
+        .setStyle(ButtonStyle.Primary)
+    )
+  ];
+}
+
+export function buildMonthlyReportComponents(monthKey: string): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`report:nav:${shiftMonthKey(monthKey, -1)}`)
+        .setEmoji("◀️")
+        .setLabel("前月")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`report:nav:${shiftMonthKey(monthKey, 1)}`)
+        .setEmoji("▶️")
+        .setLabel("翌月")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("payroll:dashboard:panel")
+        .setEmoji("📊")
+        .setLabel("支給案を開く")
+        .setStyle(ButtonStyle.Primary)
     )
   ];
 }

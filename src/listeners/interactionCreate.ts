@@ -44,12 +44,15 @@ import { ParticipantsService } from "../features/participants/service.js";
 import { buildPayrollItemEmbed, buildPayrollRunEmbed } from "../features/payroll/embeds.js";
 import { PayrollService } from "../features/payroll/service.js";
 import { SpecialBonusService, type SpecialBonusRecord } from "../features/bonus/service.js";
+import { ReportService } from "../features/report/service.js";
+import { buildMonthlyReportEmbed } from "../features/report/embeds.js";
+import { SelfReviewService } from "../features/retrospective/selfReview.js";
 import { RewardsService, type RewardSettingsSummary } from "../features/rewards/service.js";
 import { EventRolesService } from "../features/roles/service.js";
 import { TodoService } from "../features/todo/service.js";
 import { TimekeeperService } from "../features/timekeeper/service.js";
 import { listAuditLog, logAudit, type AuditLogRecord } from "../lib/audit.js";
-import { assertLead, assertLeadOrSub, fetchGuildMember, isEventLead, PermissionError } from "../lib/permission.js";
+import { assertLead, assertLeadOrSub, fetchGuildMember, isEventer, isEventLead, PermissionError } from "../lib/permission.js";
 import { parseDiscordUserId } from "../lib/parser.js";
 import { formatJstDateTime, jstDateTimeToUnix, unixNow } from "../lib/time.js";
 import { logger } from "../lib/logger.js";
@@ -120,6 +123,8 @@ import {
   buildRewardScaleSelect,
   buildRewardSettingsComponents,
   buildRewardUserGradeSelect,
+  buildMonthlyReportComponents,
+  buildSelfReviewContinueComponents,
   buildScaleSelect,
   buildStatusSelect,
   buildStatusRollbackConfirmComponents,
@@ -162,6 +167,8 @@ import {
   buildRewardRoleRateModal,
   buildRewardScaleMultiplierModal,
   buildRoleAddModal,
+  buildSelfReviewPage1Modal,
+  buildSelfReviewPage2Modal,
   buildSpecialBonusModal,
   buildSpecialBonusRejectModal,
   buildTodoAddModal,
@@ -480,6 +487,21 @@ async function postSpecialBonusApproval(
 
 function rewardService(repos: ReturnType<typeof createRepos>): RewardsService {
   return new RewardsService(getDb(), repos.settingsRepo, repos.eventsRepo);
+}
+
+function buildReportReply(
+  repos: ReturnType<typeof createRepos>,
+  monthKey: string
+): {
+  embeds: ReturnType<typeof buildMonthlyReportEmbed>[];
+  components: ReturnType<typeof buildMonthlyReportComponents>;
+} {
+  const service = new ReportService(getDb(), repos.settingsRepo);
+  const report = service.buildMonthlyReport(monthKey);
+  return {
+    embeds: [buildMonthlyReportEmbed(report)],
+    components: buildMonthlyReportComponents(monthKey)
+  };
 }
 
 function canManageRewardSettings(userId: string, member: GuildMember, repos: ReturnType<typeof createRepos>): boolean {
@@ -1007,6 +1029,45 @@ export function registerInteractionCreateListener(client: Client): void {
               embeds: [buildPayrollRunEmbed(run, items, 0)],
               components: buildPayrollRunComponents(run, items, 0)
             });
+            return;
+          }
+        }
+
+        if (namespace === "report") {
+          const member = await fetchGuildMember(interaction);
+          if (interaction.user.id !== config.ownerId) {
+            assertLeadOrSub(member, repos.settingsRepo);
+          }
+          const monthKey =
+            threadId === "default" ? new PayrollService(getDb()).defaultMonthKey() : threadId;
+
+          if (action === "open") {
+            await interaction.reply({ ...buildReportReply(repos, monthKey), ephemeral: true });
+            return;
+          }
+
+          if (action === "nav") {
+            await interaction.update(buildReportReply(repos, monthKey));
+            return;
+          }
+        }
+
+        if (namespace === "selfreview") {
+          const monthKey = threadId;
+          const member = await fetchGuildMember(interaction);
+          if (interaction.user.id !== config.ownerId && !isEventer(member, repos.settingsRepo)) {
+            throw new PermissionError("この操作はイベンター以上のみ実行できます。");
+          }
+          const service = new SelfReviewService(getDb(), repos.settingsRepo);
+          const existing = service.getReview(interaction.user.id, monthKey);
+
+          if (action === "open") {
+            await interaction.showModal(buildSelfReviewPage1Modal(monthKey, existing ?? {}));
+            return;
+          }
+
+          if (action === "continue") {
+            await interaction.showModal(buildSelfReviewPage2Modal(monthKey, existing ?? {}));
             return;
           }
         }
@@ -2937,6 +2998,45 @@ export function registerInteractionCreateListener(client: Client): void {
             payrollService.syncSpecialBonusForUser(interaction.user.id, bonus.month_key, bonus.user_id);
             await interaction.editReply({
               content: `特別貢献 #${bonus.id} を却下しました。`
+            });
+            return;
+          }
+        }
+
+        if (namespace === "selfreview") {
+          const monthKey = threadId;
+          const repos = createRepos(getDb());
+          const member = await fetchGuildMember(interaction);
+          if (interaction.user.id !== config.ownerId && !isEventer(member, repos.settingsRepo)) {
+            throw new PermissionError("この操作はイベンター以上のみ実行できます。");
+          }
+          const service = new SelfReviewService(getDb(), repos.settingsRepo);
+
+          if (action === "page1-submit") {
+            service.savePartial(interaction.user.id, monthKey, {
+              did: interaction.fields.getTextInputValue("did"),
+              good: interaction.fields.getTextInputValue("good"),
+              hard: interaction.fields.getTextInputValue("hard")
+            });
+            await interaction.reply({
+              content: "1 枚目を保存しました。続けて 2 枚目を入力してください。",
+              components: buildSelfReviewContinueComponents(monthKey),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "page2-submit") {
+            await interaction.deferReply({ ephemeral: true });
+            const record = service.submit(interaction.user.id, monthKey, {
+              wantNext: interaction.fields.getTextInputValue("want_next"),
+              improve: interaction.fields.getTextInputValue("improve"),
+              needSupport: interaction.fields.getTextInputValue("need_support")
+            });
+            await service.refreshPanel(interaction.client, monthKey);
+            await service.forwardToLead(interaction.client, record);
+            await interaction.editReply({
+              content: `${monthKey} の振り返りを提出しました。ありがとうございます。`
             });
             return;
           }

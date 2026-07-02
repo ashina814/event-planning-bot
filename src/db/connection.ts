@@ -139,6 +139,16 @@ function runMigrations(db: Database.Database): void {
       continue;
     }
 
+    if (name === "010_d4_evaluation_bonus.sql" && hasTable(db, "special_bonuses")) {
+      markMigrationApplied(db, name);
+      continue;
+    }
+
+    if (name === "011_d5_report_review.sql" && hasTable(db, "self_reviews")) {
+      markMigrationApplied(db, name);
+      continue;
+    }
+
     const sql = readFileSync(resolve(migrationsDir, name), "utf8");
     const tx = db.transaction(() => {
       db.exec(sql);

@@ -9,10 +9,13 @@ import type { SeriesRepo } from "../db/repos/series.js";
 import type { SettingsRepo } from "../db/repos/settings.js";
 import type { TimersRepo } from "../db/repos/timers.js";
 import type { TodosRepo } from "../db/repos/todos.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import { config } from "../config.js";
 import { getDb } from "../db/connection.js";
 import { logger } from "../lib/logger.js";
-import { formatJstDate, unixNow } from "../lib/time.js";
+import { formatJstDate, jstDateToUnixAtMidnight, unixNow } from "../lib/time.js";
+import { currentJstMonthKey, parseMonthKey } from "../features/overview/calendar.js";
+import { SelfReviewService } from "../features/retrospective/selfReview.js";
 import { AnnouncementService } from "../features/announcement/service.js";
 import { EventLifecycleService } from "../features/event-lifecycle/service.js";
 import { syncEventArtifacts } from "../features/event-lifecycle/sync.js";
@@ -196,10 +199,17 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
       if (channelId) {
         const channel = await deps.client.channels.fetch(channelId).catch(() => null);
         if (channel && "send" in channel) {
+          const reportRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`report:open:${monthKey}`)
+              .setEmoji("📈")
+              .setLabel("月次レポートを開く")
+              .setStyle(ButtonStyle.Secondary)
+          );
           await channel.send({
-            content: `${monthKey} の支給案を作成しました。`,
+            content: `${monthKey} の支給案の確認をお願いします。`,
             embeds: [buildPayrollRunEmbed(run, items, 0)],
-            components: buildPayrollRunComponents(run, items, 0)
+            components: [...buildPayrollRunComponents(run, items, 0), reportRow]
           });
         }
       }
@@ -210,6 +220,39 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         fireAt: nextMonthFirstTenJst(now),
         now
       });
+      return;
+    }
+    case "self_review_panel": {
+      const monthKey = currentJstMonthKey();
+      const service = new SelfReviewService(getDb(), deps.settingsRepo);
+      await service.ensurePanel(deps.client, monthKey);
+
+      const now = unixNow();
+      const reminderDays = [15, daysInMonthOf(monthKey) - 1];
+      for (const day of reminderDays) {
+        const fireAt = jstDayTenJst(monthKey, day);
+        if (fireAt > now) {
+          deps.jobsRepo.create({
+            kind: "self_review_reminder",
+            payload: { monthKey },
+            fireAt,
+            now
+          });
+        }
+      }
+
+      deps.jobsRepo.create({
+        kind: "self_review_panel",
+        payload: {},
+        fireAt: nextMonthFirstTenJst(now),
+        now
+      });
+      return;
+    }
+    case "self_review_reminder": {
+      const monthKey = String(payload.monthKey ?? currentJstMonthKey());
+      const service = new SelfReviewService(getDb(), deps.settingsRepo);
+      await service.refreshPanel(deps.client, monthKey);
       return;
     }
     case "event_reminder_retrospective": {
@@ -328,6 +371,15 @@ function parseAnnouncementEmojis(announcement: AnnouncementRecord): ReactionEmoj
   } catch {
     return [];
   }
+}
+
+function jstDayTenJst(monthKey: string, day: number): number {
+  return jstDateToUnixAtMidnight(`${monthKey}-${String(day).padStart(2, "0")}`) + 10 * 60 * 60;
+}
+
+function daysInMonthOf(monthKey: string): number {
+  const { year, month } = parseMonthKey(monthKey);
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 function nextMondayTenJst(now: number): number {

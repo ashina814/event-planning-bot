@@ -119,6 +119,14 @@ export class EvaluationService {
       roleCounts[label] = roleCounts[label] ?? 0;
     }
 
+    const retroSubmitted = Boolean(
+      this.db
+        .prepare(
+          "SELECT 1 AS found FROM self_reviews WHERE user_id = ? AND month_key = ? AND submitted_at IS NOT NULL"
+        )
+        .get(userId, monthKey)
+    );
+
     return {
       roleCounts,
       mainCount: roleCounts["主担当"] ?? 0,
@@ -127,7 +135,7 @@ export class EvaluationService {
       confirmRate: confirmAssigned > 0 ? confirmDone / confirmAssigned : null,
       confirmAssigned,
       confirmDone,
-      retroSubmitted: false,
+      retroSubmitted,
       handoverCount,
       lastActiveAt: activeCandidates.length > 0 ? Math.max(...activeCandidates) : null
     };

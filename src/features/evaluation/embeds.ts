@@ -29,7 +29,7 @@ export function buildEvaluationMaterialEmbed(
       { name: "ToDo", value: `完了 ${material.todoDone} / 期限超過 ${material.todoOverdue}`, inline: true },
       { name: "担当確認率", value: confirmRate, inline: true },
       { name: "引き継ぎ引受", value: `${material.handoverCount} 回`, inline: true },
-      { name: "振り返り提出", value: material.retroSubmitted ? "提出済み" : "未連携", inline: true },
+      { name: "振り返り提出", value: material.retroSubmitted ? "提出済み" : "未提出", inline: true },
       { name: "最終活動", value: lastActive, inline: true },
       { name: "現在の評価ボーナス", value: currentEval, inline: true }
     );
