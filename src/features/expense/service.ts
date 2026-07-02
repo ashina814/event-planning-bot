@@ -5,6 +5,7 @@ import type { JobsRepo } from "../../db/repos/jobs.js";
 import { roleLabel } from "../../db/repos/roles.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
+import { logAudit } from "../../lib/audit.js";
 import { isEventLead } from "../../lib/permission.js";
 import { parseDiscordSnowflake } from "../../lib/parser.js";
 import {
@@ -115,6 +116,13 @@ export class ExpenseService {
     });
 
     const expense = this.requireExpense(id);
+    logAudit({
+      actorId: member.id,
+      action: "expense.create",
+      targetType: "expense",
+      targetId: String(expense.id),
+      after: expense
+    });
     await this.checkThresholds(event, expense);
     return expense;
   }
@@ -128,6 +136,14 @@ export class ExpenseService {
 
     this.expensesRepo.void(expense.id);
     const updated = this.requireExpense(expense.id);
+    logAudit({
+      actorId: member.id,
+      action: "expense.void",
+      targetType: "expense",
+      targetId: String(expense.id),
+      before: expense,
+      after: updated
+    });
     await this.postExpenseNotice(`⚠️ 出費 #${expense.id} は <@${member.id}> により取り消されました。`);
     return updated;
   }
@@ -170,6 +186,14 @@ export class ExpenseService {
     });
 
     const corrected = this.requireExpense(id);
+    logAudit({
+      actorId: member.id,
+      action: "expense.correct",
+      targetType: "expense",
+      targetId: String(corrected.id),
+      before: original,
+      after: corrected
+    });
     if (corrected.proof_status === "pending_proof") {
       this.jobsRepo.create({
         kind: "expense_proof_timeout",
@@ -218,6 +242,13 @@ export class ExpenseService {
     });
 
     const expense = this.requireExpense(id);
+    logAudit({
+      actorId: member.id,
+      action: "expense.create",
+      targetType: "expense",
+      targetId: String(expense.id),
+      after: expense
+    });
     await this.postExpenseLog(expense);
     if (event) {
       await this.checkThresholds(event, expense);

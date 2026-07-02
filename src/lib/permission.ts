@@ -29,9 +29,30 @@ export function isEventLead(member: GuildMember, settingsRepo: SettingsRepo): bo
   return Boolean(roleId && memberHasRole(member, roleId));
 }
 
+export function isSubLead(member: GuildMember, settingsRepo: SettingsRepo): boolean {
+  const roleId = settingsRepo.get("eventSubLeadRole");
+  return Boolean(roleId && memberHasRole(member, roleId));
+}
+
+export function isLeadOrSub(member: GuildMember, settingsRepo: SettingsRepo): boolean {
+  return isEventLead(member, settingsRepo) || isSubLead(member, settingsRepo);
+}
+
 export function isEventer(member: GuildMember, settingsRepo: SettingsRepo): boolean {
   const roleId = settingsRepo.get("eventerRole");
-  return isEventLead(member, settingsRepo) || Boolean(roleId && memberHasRole(member, roleId));
+  return isLeadOrSub(member, settingsRepo) || Boolean(roleId && memberHasRole(member, roleId));
+}
+
+export function assertLead(member: GuildMember, settingsRepo: SettingsRepo): void {
+  if (!isEventLead(member, settingsRepo)) {
+    throw new PermissionError("この操作はイベント統括のみ実行できます。");
+  }
+}
+
+export function assertLeadOrSub(member: GuildMember, settingsRepo: SettingsRepo): void {
+  if (!isLeadOrSub(member, settingsRepo)) {
+    throw new PermissionError("この操作はイベント統括またはサブ統括のみ実行できます。");
+  }
 }
 
 export function assertCanCreateEvent(member: GuildMember, settingsRepo: SettingsRepo): void {
@@ -46,7 +67,7 @@ export function assertCanManageEvent(
   roles: EventRoleRecord[],
   settingsRepo: SettingsRepo
 ): void {
-  if (isEventLead(member, settingsRepo)) {
+  if (isLeadOrSub(member, settingsRepo)) {
     return;
   }
 
@@ -68,7 +89,7 @@ export function assertCanAssignRole(
   settingsRepo: SettingsRepo
 ): void {
   if (roleType === "main") {
-    if (!isEventLead(member, settingsRepo)) {
+    if (!isLeadOrSub(member, settingsRepo)) {
       throw new PermissionError("主担当の設定はイベント統括のみ可能です。");
     }
     return;
@@ -84,7 +105,7 @@ export function assertCanHandover(
   roleType: string,
   settingsRepo: SettingsRepo
 ): void {
-  if (isEventLead(member, settingsRepo)) {
+  if (isLeadOrSub(member, settingsRepo)) {
     return;
   }
 

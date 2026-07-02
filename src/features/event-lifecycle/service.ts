@@ -11,10 +11,17 @@ import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SeriesRepo } from "../../db/repos/series.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
 import type { TimersRepo } from "../../db/repos/timers.js";
-import { assertCanCreateEvent, assertCanManageEvent, fetchGuildMember, isEventLead } from "../../lib/permission.js";
+import { logAudit } from "../../lib/audit.js";
+import {
+  assertCanCreateEvent,
+  assertCanManageEvent,
+  assertLeadOrSub,
+  fetchGuildMember,
+  isEventLead
+} from "../../lib/permission.js";
 import { titleWithStatusPrefix } from "../../lib/parser.js";
 import { formatJstDateTime, jstDateTimeToUnix, unixNow } from "../../lib/time.js";
-import type { EventRecord, EventStatus } from "../../types/index.js";
+import type { EventRecord, EventScale, EventStatus } from "../../types/index.js";
 import { allowedStatusTransitions } from "../../ui/buttons.js";
 import { buildParentPost } from "../../ui/embeds.js";
 import { statusLabels } from "../../ui/labels.js";
@@ -118,6 +125,21 @@ export class EventLifecycleService {
 
     const now = unixNow();
     this.eventsRepo.updateStatus(threadId, nextStatus, now);
+    logAudit({
+      actorId: member.id,
+      action: "event.status_change",
+      targetType: "event",
+      targetId: threadId,
+      before: { status: event.status },
+      after: { status: nextStatus }
+    });
+    if (nextStatus === "postponed") {
+      this.jobsRepo.cancelJobsByThread(threadId, [...eventRescheduleJobKinds]);
+      await this.postToThread(
+        threadId,
+        "このイベントは延期されました。再開するときは [状態] から企画中に戻し、[日時] を再設定してください"
+      );
+    }
     if (nextStatus === "announced" || nextStatus === "in_progress") {
       this.jobsRepo.cancelJobsByThread(threadId, [...eventRescheduleJobKinds]);
       this.scheduleEventJobs(this.requireEvent(threadId), now);
@@ -143,11 +165,19 @@ export class EventLifecycleService {
 
     const now = unixNow();
     this.eventsRepo.updateStatus(threadId, nextStatus, now);
+    logAudit({
+      actorId: member.id,
+      action: "event.status_change",
+      targetType: "event",
+      targetId: threadId,
+      before: { status: event.status },
+      after: { status: nextStatus }
+    });
     await this.renameThread(threadId, nextStatus, event.title);
     await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
 
     const warning =
-      event.status === "cancelled" && event.scheduled_at && event.scheduled_at <= now
+      (event.status === "cancelled" || event.status === "postponed") && event.scheduled_at && event.scheduled_at <= now
         ? "開催日時が過去のままです。[日時] から更新してください。"
         : null;
     return { event: this.requireEvent(threadId), warning };
@@ -155,9 +185,7 @@ export class EventLifecycleService {
 
   async deleteEvent(member: GuildMember, threadId: string, mode: DeleteEventMode): Promise<string> {
     const event = this.requireEvent(threadId);
-    if (!isEventLead(member, this.settingsRepo)) {
-      throw new Error("イベントを削除できるのはイベント統括のみです。");
-    }
+    assertLeadOrSub(member, this.settingsRepo);
 
     this.jobsRepo.cancelJobsByThread(threadId);
     const channel = await this.client.channels.fetch(threadId).catch(() => null);
@@ -170,6 +198,13 @@ export class EventLifecycleService {
     }
 
     this.eventsRepo.delete(threadId);
+    logAudit({
+      actorId: member.id,
+      action: "event.delete",
+      targetType: "event",
+      targetId: threadId,
+      before: { event, mode }
+    });
 
     const deletableChannel = channel as { delete?: (reason?: string) => Promise<unknown> } | null;
     if (mode === "thread" && deletableChannel?.delete) {
@@ -188,7 +223,16 @@ export class EventLifecycleService {
     assertCanManageEvent(member, event, roles, this.settingsRepo);
 
     const scheduledAt = jstDateTimeToUnix(input.trim());
-    return this.changeScheduledAt(threadId, scheduledAt);
+    const updated = await this.changeScheduledAt(threadId, scheduledAt);
+    logAudit({
+      actorId: member.id,
+      action: "event.reschedule",
+      targetType: "event",
+      targetId: threadId,
+      before: { scheduled_at: event.scheduled_at },
+      after: { scheduled_at: updated.scheduled_at }
+    });
+    return updated;
   }
 
   async changeScheduledAt(threadId: string, scheduledAt: number): Promise<EventRecord> {
@@ -200,6 +244,25 @@ export class EventLifecycleService {
     await this.warnIfIdleTimerExists(threadId);
     await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
     return updated;
+  }
+
+  async setScale(member: GuildMember, threadId: string, scale: EventScale): Promise<EventRecord> {
+    const event = this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    assertCanManageEvent(member, event, roles, this.settingsRepo);
+
+    const now = unixNow();
+    this.eventsRepo.updateScale(threadId, scale, now);
+    logAudit({
+      actorId: member.id,
+      action: "event.scale_change",
+      targetType: "event",
+      targetId: threadId,
+      before: { scale: event.scale },
+      after: { scale }
+    });
+    await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
+    return this.requireEvent(threadId);
   }
 
   async autoProgress(threadId: string, expectedScheduledAt: number | null = null): Promise<void> {
@@ -220,7 +283,7 @@ export class EventLifecycleService {
 
   async handleRetrospectiveReminder(threadId: string, expectedScheduledAt: number | null = null): Promise<void> {
     const event = this.eventsRepo.get(threadId);
-    if (!event || event.status === "done" || event.status === "cancelled") {
+    if (!event || event.status === "done" || event.status === "cancelled" || event.status === "postponed") {
       return;
     }
     if (expectedScheduledAt && event.scheduled_at !== expectedScheduledAt) {
@@ -264,7 +327,8 @@ export class EventLifecycleService {
       event.status === "announced" ||
       event.status === "in_progress" ||
       event.status === "done" ||
-      event.status === "cancelled"
+      event.status === "cancelled" ||
+      event.status === "postponed"
     ) {
       return;
     }
@@ -318,6 +382,13 @@ export class EventLifecycleService {
     }
   }
 
+  private async postToThread(threadId: string, content: string): Promise<void> {
+    const channel = await this.client.channels.fetch(threadId).catch(() => null);
+    if (channel && "send" in channel) {
+      await channel.send({ content });
+    }
+  }
+
   private previousStatus(status: EventStatus): EventStatus | null {
     switch (status) {
       case "announced":
@@ -329,6 +400,7 @@ export class EventLifecycleService {
       case "done":
         return "announced";
       case "cancelled":
+      case "postponed":
         return "planning";
       case "planning":
         return null;
@@ -337,6 +409,9 @@ export class EventLifecycleService {
 
   private scheduleEventJobs(event: EventRecord, now: number): void {
     if (!event.scheduled_at) {
+      return;
+    }
+    if (event.status === "postponed") {
       return;
     }
 
@@ -375,7 +450,11 @@ export class EventLifecycleService {
       });
     }
 
-    if (event.status !== "done" && event.status !== "cancelled" && event.scheduled_at + 24 * 60 * 60 > now) {
+    if (
+      event.status !== "done" &&
+      event.status !== "cancelled" &&
+      event.scheduled_at + 24 * 60 * 60 > now
+    ) {
       this.jobsRepo.create({
         kind: "event_reminder_retrospective",
         payload: {

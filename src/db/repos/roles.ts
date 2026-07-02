@@ -83,7 +83,8 @@ function emptySlot(identity: RoleIdentity, ord: number): RoleSlot {
     role_label: identity.roleLabel,
     ord,
     user_id: null,
-    assigned_at: null
+    assigned_at: null,
+    confirmed_at: null
   };
 }
 
@@ -94,7 +95,8 @@ function toSlot(role: EventRoleRecord): RoleSlot {
     role_label: role.role_label,
     ord: role.ord,
     user_id: role.user_id,
-    assigned_at: role.assigned_at
+    assigned_at: role.assigned_at,
+    confirmed_at: role.confirmed_at
   };
 }
 
@@ -182,8 +184,8 @@ export class RolesRepo {
       this.db
         .prepare(
           `INSERT INTO event_roles (
-            thread_id, role_type, role_kind, role_label, ord, user_id, assigned_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+            thread_id, role_type, role_kind, role_label, ord, user_id, assigned_at, confirmed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
         )
         .run(
           threadId,
@@ -197,6 +199,33 @@ export class RolesRepo {
     });
 
     tx();
+  }
+
+  confirmRole(threadId: string, roleKey: string, userId: string, now: number): EventRoleRecord | null {
+    const identity = parseRoleKey(roleKey);
+    this.db
+      .prepare(
+        `UPDATE event_roles
+         SET confirmed_at = ?
+         WHERE thread_id = ?
+           AND role_type = ?
+           AND user_id = ?
+           AND confirmed_at IS NULL`
+      )
+      .run(now, threadId, identity.roleType, userId);
+
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM event_roles
+           WHERE thread_id = ?
+             AND role_type = ?
+             AND user_id = ?
+           ORDER BY assigned_at DESC
+           LIMIT 1`
+        )
+        .get(threadId, identity.roleType, userId) as EventRoleRecord | undefined
+    ) ?? null;
   }
 
   deleteRole(threadId: string, roleKey: string): void {

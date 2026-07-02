@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS events (
   series_id       INTEGER REFERENCES series(id),
   title           TEXT NOT NULL,
   status          TEXT NOT NULL,
+  scale           TEXT NOT NULL DEFAULT 'normal',
   scheduled_at    INTEGER,
   control_msg_id  TEXT,
   parent_msg_id   TEXT,
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS event_roles (
   ord             INTEGER NOT NULL DEFAULT 0,
   user_id         TEXT NOT NULL,
   assigned_at     INTEGER NOT NULL,
+  confirmed_at    INTEGER,
   PRIMARY KEY (thread_id, role_type, user_id)
 );
 
@@ -183,6 +185,20 @@ CREATE TABLE IF NOT EXISTS expenses (
 
 CREATE INDEX IF NOT EXISTS idx_expenses_thread ON expenses(thread_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_occurred ON expenses(occurred_at);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_id        TEXT NOT NULL,
+  action          TEXT NOT NULL,
+  target_type     TEXT NOT NULL,
+  target_id       TEXT,
+  before_json     TEXT,
+  after_json      TEXT,
+  ts              INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_log(target_type, target_id);
 
 CREATE TABLE IF NOT EXISTS expense_thresholds (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -10,9 +10,11 @@ import {
 import {
   expenseCategories,
   expenseDirections,
+  eventScales,
   roleTypes,
   type AnnouncementRecord,
   type EventRecord,
+  type EventScale,
   type EventStatus,
   type ExpenseCategory,
   type ExpenseDirection,
@@ -27,6 +29,7 @@ import {
   expenseCategoryLabels,
   expenseDirectionLabels,
   roleLabels,
+  scaleLabels,
   statusLabels
 } from "./labels.js";
 import { shiftMonthKey } from "../features/overview/calendar.js";
@@ -36,6 +39,13 @@ import { formatJstDateTime } from "../lib/time.js";
 function selectText(value: string, maxLength: number): string {
   const trimmed = value.replace(/\s+/g, " ").trim();
   return (trimmed || "(空)").slice(0, maxLength);
+}
+
+function roleAssignmentDescription(role: RoleSlot): string {
+  if (!role.user_id) {
+    return "未設定";
+  }
+  return `<@${role.user_id}>${role.confirmed_at ? "" : " (未確認)"}`;
 }
 
 export function buildControlPanelComponents(
@@ -114,12 +124,15 @@ export function buildControlPanelComponents(
 export function allowedStatusTransitions(status: EventStatus): EventStatus[] {
   switch (status) {
     case "planning":
-      return ["announcing", "cancelled"];
+      return ["announcing", "postponed", "cancelled"];
     case "announcing":
-      return ["announced", "cancelled"];
+      return ["announced", "postponed", "cancelled"];
     case "announced":
+      return ["in_progress", "done", "postponed", "cancelled"];
     case "in_progress":
       return ["done", "cancelled"];
+    case "postponed":
+      return ["planning"];
     case "done":
     case "cancelled":
       return [];
@@ -137,6 +150,8 @@ export function rollbackStatusTarget(status: EventStatus): EventStatus | null {
     case "done":
       return "announced";
     case "cancelled":
+      return "planning";
+    case "postponed":
       return "planning";
     case "planning":
       return null;
@@ -186,6 +201,13 @@ export function buildEventMoreComponents(threadId: string): ActionRowBuilder<But
   return [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
+        .setCustomId(`event:scale:${threadId}`)
+        .setEmoji("📏")
+        .setLabel("イベント規模")
+        .setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
         .setCustomId(`event:delete-choice:${threadId}:data`)
         .setLabel("削除する (データのみ)")
         .setStyle(ButtonStyle.Danger),
@@ -197,6 +219,26 @@ export function buildEventMoreComponents(threadId: string): ActionRowBuilder<But
         .setCustomId(`event:delete-cancel:${threadId}`)
         .setLabel("キャンセル")
         .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildScaleSelect(
+  threadId: string,
+  currentScale: EventScale
+): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`event:scale-select:${threadId}`)
+        .setPlaceholder("イベント規模を選択")
+        .addOptions(
+          eventScales.map((scale) => ({
+            label: scaleLabels[scale] ?? scale,
+            value: scale,
+            default: scale === currentScale
+          }))
+        )
     )
   ];
 }
@@ -543,7 +585,7 @@ export function buildRolePanelComponents(
             custom.slice(0, 25).map((role) => ({
               label: roleLabel(role).slice(0, 100),
               value: roleKeyFor(role),
-              description: role.user_id ? `<@${role.user_id}>` : "未設定"
+              description: roleAssignmentDescription(role)
             }))
           )
       )
@@ -560,7 +602,7 @@ export function buildRolePanelComponents(
             deletable.slice(0, 25).map((role) => ({
               label: roleLabel(role).slice(0, 100),
               value: roleKeyFor(role),
-              description: role.user_id ? `<@${role.user_id}>` : "未設定"
+              description: roleAssignmentDescription(role)
             }))
           )
       )
@@ -652,6 +694,32 @@ export function buildRoleAssignUserSelect(
   ];
 }
 
+export function buildRoleConfirmationComponents(
+  threadId: string,
+  assignments: Array<{ roleKey: string; label: string; userId: string; confirmed?: boolean }>
+): ActionRowBuilder<ButtonBuilder>[] {
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  const visible = assignments.slice(0, 25);
+  for (let index = 0; index < visible.length; index += 5) {
+    const row = new ActionRowBuilder<ButtonBuilder>();
+    visible.slice(index, index + 5).forEach((assignment) => {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`role:confirm:${threadId}:${assignment.roleKey}`)
+          .setLabel(
+            assignment.confirmed
+              ? `✅ ${assignment.label} 確認済み`.slice(0, 80)
+              : `✅ ${assignment.label} 確認しました`.slice(0, 80)
+          )
+          .setStyle(assignment.confirmed ? ButtonStyle.Secondary : ButtonStyle.Success)
+          .setDisabled(Boolean(assignment.confirmed))
+      );
+    });
+    rows.push(row);
+  }
+  return rows;
+}
+
 export function buildRoleHandoverSelect(
   threadId: string,
   roles: RoleSlot[]
@@ -665,7 +733,7 @@ export function buildRoleHandoverSelect(
           roles.slice(0, 25).map((role) => ({
             label: roleLabel(role).slice(0, 100),
             value: roleKeyFor(role),
-            description: role.user_id ? `<@${role.user_id}>` : "未設定"
+            description: roleAssignmentDescription(role)
           }))
         )
     )
@@ -1199,7 +1267,29 @@ export function buildAdminPanelComponents(): ActionRowBuilder<ButtonBuilder>[] {
         .setCustomId("admin:orphans:panel")
         .setEmoji("🧹")
         .setLabel("孤児レコード整理")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("admin:audit:0")
+        .setEmoji("📜")
+        .setLabel("操作ログ")
         .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildAuditLogComponents(page: number, hasNext: boolean): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`admin:audit:${Math.max(0, page - 1)}`)
+        .setLabel("前へ")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page <= 0),
+      new ButtonBuilder()
+        .setCustomId(`admin:audit:${page + 1}`)
+        .setLabel("さらに表示")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(!hasNext)
     )
   ];
 }

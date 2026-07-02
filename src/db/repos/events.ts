@@ -1,11 +1,12 @@
 import type Database from "better-sqlite3";
-import type { EventRecord, EventStatus } from "../../types/index.js";
+import type { EventRecord, EventScale, EventStatus } from "../../types/index.js";
 
 interface CreateEventInput {
   threadId: string;
   seriesId?: number | null;
   title: string;
   status: EventStatus;
+  scale?: EventScale;
   scheduledAt?: number | null;
   controlMsgId?: string | null;
   parentMsgId?: string | null;
@@ -20,10 +21,10 @@ export class EventsRepo {
     this.db
       .prepare(
         `INSERT INTO events (
-          thread_id, series_id, title, status, scheduled_at, control_msg_id,
+          thread_id, series_id, title, status, scale, scheduled_at, control_msg_id,
           parent_msg_id, created_by, created_at, updated_at, closed_at
         ) VALUES (
-          @threadId, @seriesId, @title, @status, @scheduledAt, @controlMsgId,
+          @threadId, @seriesId, @title, @status, @scale, @scheduledAt, @controlMsgId,
           @parentMsgId, @createdBy, @now, @now, NULL
         )`
       )
@@ -32,6 +33,7 @@ export class EventsRepo {
         seriesId: input.seriesId ?? null,
         title: input.title,
         status: input.status,
+        scale: input.scale ?? "normal",
         scheduledAt: input.scheduledAt ?? null,
         controlMsgId: input.controlMsgId ?? null,
         parentMsgId: input.parentMsgId ?? null,
@@ -53,6 +55,7 @@ export class EventsRepo {
       .prepare(
         `SELECT * FROM events
          WHERE status NOT IN ('done', 'cancelled')
+           AND status != 'postponed'
          ORDER BY COALESCE(scheduled_at, created_at) ASC
          LIMIT ?`
       )
@@ -96,6 +99,7 @@ export class EventsRepo {
       .prepare(
         `SELECT * FROM events
          WHERE scheduled_at >= ? AND scheduled_at < ?
+           AND status != 'postponed'
          ORDER BY scheduled_at ASC
          LIMIT ?`
       )
@@ -157,6 +161,12 @@ export class EventsRepo {
     this.db
       .prepare("UPDATE events SET title = ?, updated_at = ? WHERE thread_id = ?")
       .run(title, now, threadId);
+  }
+
+  updateScale(threadId: string, scale: EventScale, now: number): void {
+    this.db
+      .prepare("UPDATE events SET scale = ?, updated_at = ? WHERE thread_id = ?")
+      .run(scale, now, threadId);
   }
 
   updateScheduledAt(threadId: string, scheduledAt: number | null, now: number): void {

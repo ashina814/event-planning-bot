@@ -1,4 +1,4 @@
-import { Events, type Client, type GuildMember, type Interaction } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, type Client, type GuildMember, type Interaction } from "discord.js";
 import { commandMap } from "../commands/index.js";
 import {
   announcementMessageLink,
@@ -42,17 +42,20 @@ import { ParticipantsService } from "../features/participants/service.js";
 import { EventRolesService } from "../features/roles/service.js";
 import { TodoService } from "../features/todo/service.js";
 import { TimekeeperService } from "../features/timekeeper/service.js";
-import { fetchGuildMember, PermissionError } from "../lib/permission.js";
+import { listAuditLog, logAudit, type AuditLogRecord } from "../lib/audit.js";
+import { assertLeadOrSub, fetchGuildMember, PermissionError } from "../lib/permission.js";
 import { parseDiscordUserId } from "../lib/parser.js";
 import { formatJstDateTime, jstDateTimeToUnix, unixNow } from "../lib/time.js";
 import { logger } from "../lib/logger.js";
 import {
   eventStatuses,
+  eventScales,
   expenseCategories,
   expenseDirections,
   roleTypes,
   type AnnouncementRecord,
   type EventRecord,
+  type EventScale,
   type EventStatus,
   type ExpenseCategory,
   type ExpenseDirection,
@@ -66,6 +69,7 @@ import {
   buildAnnouncementParticipantsConfirmComponents,
   buildAnnouncementSchedulePresetComponents,
   buildAnnouncementTargetChannelSelect,
+  buildAuditLogComponents,
   buildAdminPanelComponents,
   buildEventsOverviewComponents,
   buildEventDeleteConfirmComponents,
@@ -93,6 +97,7 @@ import {
   buildParticipantsPanelComponents,
   buildRoleTypeSelect,
   buildRoleUserSelect,
+  buildScaleSelect,
   buildStatusSelect,
   buildStatusRollbackConfirmComponents,
   buildTimerPanelComponents,
@@ -142,6 +147,10 @@ function isRoleType(value: string): value is RoleType {
 
 function isEventStatus(value: string): value is EventStatus {
   return (eventStatuses as readonly string[]).includes(value);
+}
+
+function isEventScale(value: string): value is EventScale {
+  return (eventScales as readonly string[]).includes(value);
 }
 
 function isExpenseCategory(value: string): value is ExpenseCategory {
@@ -324,6 +333,19 @@ function assertOwner(userId: string): void {
   }
 }
 
+function buildAuditLogContent(page: number, rows: AuditLogRecord[]): string {
+  const header = `操作ログ (${page + 1}ページ目)`;
+  if (rows.length === 0) {
+    return `${header}\n記録はまだありません。`;
+  }
+
+  const lines = rows.map((row) => {
+    const target = row.target_id ? `${row.target_type}:${row.target_id}` : row.target_type;
+    return `• ${formatJstDateTime(row.ts)} / ${row.action} / <@${row.actor_id}> / ${target}`;
+  });
+  return [header, ...lines].join("\n").slice(0, 1900);
+}
+
 function buildAnnouncementPanelContent(
   eventTitle: string,
   announcements: AnnouncementRecord[],
@@ -477,8 +499,24 @@ export function registerInteractionCreateListener(client: Client): void {
         const repos = createRepos(getDb());
 
         if (namespace === "admin") {
-          assertOwner(interaction.user.id);
           const settings = repos.settingsRepo.all();
+
+          if (action === "audit") {
+            if (interaction.user.id !== config.ownerId) {
+              const member = await fetchGuildMember(interaction);
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const page = Math.max(0, Number(threadId) || 0);
+            const rows = listAuditLog(page, 21);
+            await interaction.update({
+              content: buildAuditLogContent(page, rows.slice(0, 20)),
+              embeds: [],
+              components: buildAuditLogComponents(page, rows.length > 20)
+            });
+            return;
+          }
+
+          assertOwner(interaction.user.id);
 
           if (action === "base") {
             await interaction.showModal(buildAdminBaseModal(settings));
@@ -546,6 +584,39 @@ export function registerInteractionCreateListener(client: Client): void {
             return;
           }
 
+          if (action === "confirm") {
+            const roleKey = parts[3];
+            if (!roleKey) {
+              throw new Error("指定された役割が無効です");
+            }
+            const member = await fetchGuildMember(interaction);
+            const service = new EventRolesService(
+              interaction.client,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.seriesRepo,
+              repos.jobsRepo,
+              repos.settingsRepo
+            );
+            await service.confirmRole(member, threadId, roleKey);
+            const components = interaction.message.components.map((row) => {
+              const nextRow = new ActionRowBuilder<ButtonBuilder>();
+              ((row as any).components as any[]).forEach((component) => {
+                const button = ButtonBuilder.from(component as any);
+                if ((component as any).customId === interaction.customId) {
+                  button
+                    .setLabel(`✅ @${interaction.user.username} 確認済み`.slice(0, 80))
+                    .setStyle(ButtonStyle.Secondary)
+                    .setDisabled(true);
+                }
+                nextRow.addComponents(button);
+              });
+              return nextRow;
+            });
+            await interaction.update({ components });
+            return;
+          }
+
           if (action === "change-main") {
             await interaction.update({
               content: "主担当にするユーザーを選んでください。",
@@ -588,6 +659,7 @@ export function registerInteractionCreateListener(client: Client): void {
               repos.eventsRepo,
               repos.rolesRepo,
               repos.seriesRepo,
+              repos.jobsRepo,
               repos.settingsRepo
             );
             const assignments = session.roles
@@ -672,6 +744,7 @@ export function registerInteractionCreateListener(client: Client): void {
               repos.eventsRepo,
               repos.rolesRepo,
               repos.seriesRepo,
+              repos.jobsRepo,
               repos.settingsRepo
             );
             await service.deleteRole(member, threadId, roleKey);
@@ -885,6 +958,14 @@ export function registerInteractionCreateListener(client: Client): void {
               content: `イベント『${event.title}』のその他操作です。`,
               components: buildEventMoreComponents(threadId),
               ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "scale") {
+            await interaction.update({
+              content: `イベント『${event.title}』の規模を選んでください。`,
+              components: buildScaleSelect(threadId, event.scale)
             });
             return;
           }
@@ -1646,6 +1727,13 @@ export function registerInteractionCreateListener(client: Client): void {
           }
           repos.jobsRepo.cancelJobsByThread(event.thread_id);
           repos.eventsRepo.delete(event.thread_id);
+          logAudit({
+            actorId: interaction.user.id,
+            action: "event.delete",
+            targetType: "event",
+            targetId: event.thread_id,
+            before: { event, mode: "orphan" }
+          });
           const orphans = await findOrphanEvents(interaction.client, repos.eventsRepo.listAll(1000));
           await interaction.editReply({
             content: `孤児イベント『${event.title}』を削除しました。`,
@@ -1658,6 +1746,7 @@ export function registerInteractionCreateListener(client: Client): void {
           if (!isEventStatus(value)) {
             throw new Error("未知の状態です。");
           }
+          const before = repos.eventsRepo.get(threadId);
           await interaction.deferUpdate();
           const member = await fetchGuildMember(interaction);
           const service = new EventLifecycleService(
@@ -1669,10 +1758,37 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.timersRepo,
             repos.settingsRepo
           );
-          await service.changeStatus(member, threadId, value);
+          const updated = await service.changeStatus(member, threadId, value);
+          const warning =
+            before?.status === "postponed" && updated.status === "planning" && updated.scheduled_at && updated.scheduled_at <= unixNow()
+              ? "\n開催日時が過去のままです。[日時] から更新してください。"
+              : "";
           await interaction.followUp({
-            content: `状態を **${statusLabels[value]}** に変更しました。`,
+            content: `状態を **${statusLabels[value]}** に変更しました。${warning}`,
             ephemeral: true
+          });
+          return;
+        }
+
+        if (namespace === "event" && action === "scale-select") {
+          if (!isEventScale(value)) {
+            throw new Error("未知のイベント規模です。");
+          }
+          await interaction.deferUpdate();
+          const member = await fetchGuildMember(interaction);
+          const service = new EventLifecycleService(
+            interaction.client,
+            repos.eventsRepo,
+            repos.rolesRepo,
+            repos.seriesRepo,
+            repos.jobsRepo,
+            repos.timersRepo,
+            repos.settingsRepo
+          );
+          await service.setScale(member, threadId, value);
+          await interaction.editReply({
+            content: "イベント規模を更新しました。",
+            components: []
           });
           return;
         }
@@ -1997,6 +2113,7 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.eventsRepo,
             repos.rolesRepo,
             repos.seriesRepo,
+            repos.jobsRepo,
             repos.settingsRepo
           );
           await service.assignRole(member, threadId, roleType, userId);
@@ -2030,6 +2147,7 @@ export function registerInteractionCreateListener(client: Client): void {
           repos.eventsRepo,
           repos.rolesRepo,
           repos.seriesRepo,
+          repos.jobsRepo,
           repos.settingsRepo
         );
         await service.assignRole(member, threadId, roleType, userId);
@@ -2099,7 +2217,7 @@ export function registerInteractionCreateListener(client: Client): void {
             "base-submit": ["guildId"],
             "channels1-submit": ["eventForum", "eventAnnounce", "internalAnnounce", "expenseLog"],
             "channels2-submit": ["minutes", "freeChat", "meetingVc"],
-            "roles-submit": ["eventLeadRole", "eventerRole"]
+            "roles-submit": ["eventLeadRole", "eventSubLeadRole", "eventerRole"]
           };
           const keys = action ? (idsByAction[action] ?? []) : [];
           if (keys.length === 0) {
@@ -2156,6 +2274,7 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.eventsRepo,
             repos.rolesRepo,
             repos.seriesRepo,
+            repos.jobsRepo,
             repos.settingsRepo
           );
           await service.handover(member, threadId, rawRoleType, newUserId, pendingTasks, reason);

@@ -3,11 +3,15 @@ export const eventStatuses = [
   "announcing",
   "announced",
   "in_progress",
+  "postponed",
   "done",
   "cancelled"
 ] as const;
 
 export type EventStatus = (typeof eventStatuses)[number];
+
+export const eventScales = ["small", "normal", "medium", "large", "special"] as const;
+export type EventScale = (typeof eventScales)[number];
 
 export const roleTypes = [
   "main",
@@ -31,6 +35,7 @@ export const settingKeys = [
   "freeChat",
   "meetingVc",
   "eventLeadRole",
+  "eventSubLeadRole",
   "eventerRole"
 ] as const;
 
@@ -49,6 +54,7 @@ export interface EventRecord {
   series_id: number | null;
   title: string;
   status: EventStatus;
+  scale: EventScale;
   scheduled_at: number | null;
   control_msg_id: string | null;
   parent_msg_id: string | null;
@@ -66,6 +72,7 @@ export interface EventRoleRecord {
   ord: number;
   user_id: string;
   assigned_at: number;
+  confirmed_at: number | null;
 }
 
 export interface RoleSlot {
@@ -75,6 +82,7 @@ export interface RoleSlot {
   ord: number;
   user_id: string | null;
   assigned_at: number | null;
+  confirmed_at: number | null;
 }
 
 export interface SeriesRecord {

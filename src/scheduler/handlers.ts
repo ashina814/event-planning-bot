@@ -17,6 +17,7 @@ import { EventLifecycleService } from "../features/event-lifecycle/service.js";
 import { syncEventArtifacts } from "../features/event-lifecycle/sync.js";
 import { ExpenseService } from "../features/expense/service.js";
 import { ParticipantsService } from "../features/participants/service.js";
+import { EventRolesService } from "../features/roles/service.js";
 import { TimekeeperService } from "../features/timekeeper/service.js";
 import { TodoService } from "../features/todo/service.js";
 import type { AnnouncementRecord, ReactionEmojiConfig, ScheduledJobRecord } from "../types/index.js";
@@ -150,6 +151,24 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.settingsRepo
       );
       await service.handleProofTimeout(expenseId);
+      return;
+    }
+    case "role_confirm_reminder": {
+      const threadId = String(payload.threadId ?? "");
+      const roleKey = String(payload.roleKey ?? "");
+      const userId = String(payload.userId ?? "");
+      if (!threadId || !roleKey || !userId) {
+        throw new Error("role_confirm_reminder payload is incomplete");
+      }
+      const service = new EventRolesService(
+        deps.client,
+        deps.eventsRepo,
+        deps.rolesRepo,
+        deps.seriesRepo,
+        deps.jobsRepo,
+        deps.settingsRepo
+      );
+      await service.handleConfirmReminder(threadId, roleKey, userId);
       return;
     }
     case "stale_event_check": {

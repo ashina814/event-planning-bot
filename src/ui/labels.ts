@@ -5,8 +5,17 @@ export const statusLabels: Record<EventStatus, string> = {
   announcing: "告知中",
   announced: "告知済",
   in_progress: "開催中",
+  postponed: "延期",
   done: "完了",
   cancelled: "見送り"
+};
+
+export const scaleLabels: Record<string, string> = {
+  small: "小規模",
+  normal: "通常",
+  medium: "中規模",
+  large: "大型",
+  special: "特別企画"
 };
 
 export const roleLabels: Record<string, string> = {

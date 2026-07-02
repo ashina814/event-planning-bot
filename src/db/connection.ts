@@ -40,6 +40,13 @@ function hasColumn(db: Database.Database, table: string, column: string): boolea
   return rows.some((row) => row.name === column);
 }
 
+function hasTable(db: Database.Database, table: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table) as { found: number } | undefined;
+  return Boolean(row);
+}
+
 function markMigrationApplied(db: Database.Database, name: string): void {
   db.prepare("INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, strftime('%s','now'))")
     .run(name);
@@ -96,6 +103,16 @@ function runMigrations(db: Database.Database): void {
     }
 
     if (name === "006_participants_frozen.sql" && hasColumn(db, "participants_config", "frozen")) {
+      markMigrationApplied(db, name);
+      continue;
+    }
+
+    if (
+      name === "007_d1_foundation.sql" &&
+      hasColumn(db, "events", "scale") &&
+      hasColumn(db, "event_roles", "confirmed_at") &&
+      hasTable(db, "audit_log")
+    ) {
       markMigrationApplied(db, name);
       continue;
     }

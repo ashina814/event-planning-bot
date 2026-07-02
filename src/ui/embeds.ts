@@ -17,10 +17,17 @@ import type {
   TimerScheduleRecord,
   TimerSectionRecord
 } from "../types/index.js";
-import { mentionUser, roleLabels, statusLabels } from "./labels.js";
+import { mentionUser, roleLabels, scaleLabels, statusLabels } from "./labels.js";
 import { roleLabel } from "../db/repos/roles.js";
 
 type RoleView = EventRoleRecord | RoleSlot;
+
+function roleUserWithConfirm(role: RoleView | null | undefined): string {
+  if (!role?.user_id) {
+    return mentionUser(undefined);
+  }
+  return `${mentionUser(role.user_id)}${role.confirmed_at ? "" : " (未確認)"}`;
+}
 
 function roleUser(input: RoleView[] | string | null | undefined, roleType?: string): string {
   if (Array.isArray(input)) {
@@ -29,13 +36,13 @@ function roleUser(input: RoleView[] | string | null | undefined, roleType?: stri
         ? item.role_kind === "main" || item.role_type === "main"
         : item.role_type === roleType || roleLabel(item) === roleType
     );
-    return mentionUser(role?.user_id ?? undefined);
+    return roleUserWithConfirm(role);
   }
   return mentionUser(input ?? undefined);
 }
 
 function roleLines(roles: RoleView[]): string {
-  const lines = roles.map((role) => `${roleLabel(role)}: ${roleUser(role.user_id)}`);
+  const lines = roles.map((role) => `${roleLabel(role)}: ${roleUserWithConfirm(role)}`);
   return lines.length > 0 ? lines.join("\n") : "主担当: 未設定";
 }
 
@@ -47,6 +54,7 @@ export function buildControlPanelEmbed(
   const scheduled = event.scheduled_at ? formatJstDateTime(event.scheduled_at) : "未定";
   const seriesName = series?.name ?? "単発";
   const isClosed = event.status === "done" || event.status === "cancelled";
+  const scaleLine = event.scale !== "normal" ? `規模: **${scaleLabels[event.scale] ?? event.scale}**` : null;
 
   return new EmbedBuilder()
     .setTitle(`${isClosed ? "📁 " : ""}${event.title}`)
@@ -54,8 +62,9 @@ export function buildControlPanelEmbed(
       [
         `状態: **${statusLabels[event.status]}**`,
         `開催: **${scheduled}**`,
-        `シリーズ: **${seriesName}**`
-      ].join("\n")
+        `シリーズ: **${seriesName}**`,
+        scaleLine
+      ].filter(Boolean).join("\n")
     )
     .addFields(
       {
@@ -143,6 +152,7 @@ export function buildAdminPanelEmbed(settings: BotSettings): EmbedBuilder {
         name: "ロール",
         value: [
           settingLine("イベント統括", settings.eventLeadRole),
+          settingLine("サブ統括", settings.eventSubLeadRole),
           settingLine("イベンター", settings.eventerRole)
         ].join("\n"),
         inline: false
@@ -251,7 +261,7 @@ export function buildFlexibleRolePanelEmbed(event: EventRecord, roles: RoleSlot[
     .addFields(
       roles.map((role) => ({
         name: roleLabel(role),
-        value: roleUser(role.user_id),
+        value: roleUserWithConfirm(role),
         inline: true
       }))
     );

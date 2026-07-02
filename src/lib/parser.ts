@@ -6,11 +6,12 @@ const prefixes: Record<EventStatus, string> = {
   announcing: "【告知中】",
   announced: "【告知済】",
   in_progress: "【告知済】",
+  postponed: "【延期】",
   done: "【完了】",
   cancelled: "【見送り】"
 };
 
-const prefixPattern = /^【(?:企画中|告知中|告知済|完了|見送り)】\s*/;
+const prefixPattern = /^【(?:企画中|告知中|告知済|延期|完了|見送り)】\s*/;
 
 export function statusPrefix(status: EventStatus): string {
   return prefixes[status];

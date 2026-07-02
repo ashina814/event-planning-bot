@@ -140,6 +140,9 @@ export function buildAdminRolesModal(settings: BotSettings): ModalBuilder {
         settingInput("eventLeadRole", "イベント統括ロール", settings.eventLeadRole, true)
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("eventSubLeadRole", "サブ統括ロール", settings.eventSubLeadRole, true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
         settingInput("eventerRole", "イベンターロール", settings.eventerRole, true)
       )
     );
