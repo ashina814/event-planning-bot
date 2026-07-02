@@ -310,6 +310,56 @@ export function buildSpecialBonusRejectModal(bonusId: number): ModalBuilder {
     );
 }
 
+interface SelfReviewPrefill {
+  did?: string | null;
+  good?: string | null;
+  hard?: string | null;
+  want_next?: string | null;
+  improve?: string | null;
+  need_support?: string | null;
+}
+
+function paragraphInput(
+  customId: string,
+  label: string,
+  placeholder: string,
+  value?: string | null
+): ActionRowBuilder<TextInputBuilder> {
+  const input = new TextInputBuilder()
+    .setCustomId(customId)
+    .setLabel(label)
+    .setPlaceholder(placeholder)
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setMaxLength(1000);
+  if (value) {
+    input.setValue(value.slice(0, 1000));
+  }
+  return new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+}
+
+export function buildSelfReviewPage1Modal(monthKey: string, prefill: SelfReviewPrefill = {}): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`selfreview:page1-submit:${monthKey}`)
+    .setTitle(`${monthKey} 振り返り (1/2)`)
+    .addComponents(
+      paragraphInput("did", "今月やったこと", "担当したイベントや作業", prefill.did),
+      paragraphInput("good", "できたこと", "うまくいったこと", prefill.good),
+      paragraphInput("hard", "難しかったこと", "つまずいた点・大変だった点", prefill.hard)
+    );
+}
+
+export function buildSelfReviewPage2Modal(monthKey: string, prefill: SelfReviewPrefill = {}): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`selfreview:page2-submit:${monthKey}`)
+    .setTitle(`${monthKey} 振り返り (2/2)`)
+    .addComponents(
+      paragraphInput("want_next", "次にやってみたい担当", "例: 司会に挑戦したい", prefill.want_next),
+      paragraphInput("improve", "改善したいこと", "自分・運営について", prefill.improve),
+      paragraphInput("need_support", "サポートしてほしいこと", "困っていること・要望", prefill.need_support)
+    );
+}
+
 export function buildAnnouncementCustomTimeModal(sessionId: string): ModalBuilder {
   return new ModalBuilder()
     .setCustomId(`ann:custom-time-submit:${sessionId}`)

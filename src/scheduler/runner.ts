@@ -69,6 +69,19 @@ export class SchedulerRunner {
     });
   }
 
+  ensureSelfReviewPanelScheduled(): void {
+    if (this.jobsRepo.hasPendingKind("self_review_panel")) {
+      return;
+    }
+    const now = unixNow();
+    this.jobsRepo.create({
+      kind: "self_review_panel",
+      payload: {},
+      fireAt: nextMonthFirstTenJst(now),
+      now
+    });
+  }
+
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
