@@ -43,6 +43,19 @@ export class SchedulerRunner {
     logger.info("scheduler started");
   }
 
+  ensureStaleEventCheckScheduled(): void {
+    if (this.jobsRepo.hasPendingKind("stale_event_check")) {
+      return;
+    }
+    const now = unixNow();
+    this.jobsRepo.create({
+      kind: "stale_event_check",
+      payload: {},
+      fireAt: nextMondayTenJst(now),
+      now
+    });
+  }
+
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
@@ -85,4 +98,32 @@ export class SchedulerRunner {
       this.running = false;
     }
   }
+}
+
+export function nextMondayTenJst(now: number): number {
+  const jst = new Date((now + 9 * 60 * 60) * 1000);
+  const day = jst.getUTCDay();
+  let daysUntilMonday = (8 - day) % 7;
+  const candidate = Date.UTC(
+    jst.getUTCFullYear(),
+    jst.getUTCMonth(),
+    jst.getUTCDate() + daysUntilMonday,
+    1,
+    0,
+    0
+  ) / 1000;
+
+  if (candidate <= now) {
+    daysUntilMonday += 7;
+    return Date.UTC(
+      jst.getUTCFullYear(),
+      jst.getUTCMonth(),
+      jst.getUTCDate() + daysUntilMonday,
+      1,
+      0,
+      0
+    ) / 1000;
+  }
+
+  return candidate;
 }

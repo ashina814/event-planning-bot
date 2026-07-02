@@ -95,6 +95,11 @@ function runMigrations(db: Database.Database): void {
       continue;
     }
 
+    if (name === "006_participants_frozen.sql" && hasColumn(db, "participants_config", "frozen")) {
+      markMigrationApplied(db, name);
+      continue;
+    }
+
     const sql = readFileSync(resolve(migrationsDir, name), "utf8");
     const tx = db.transaction(() => {
       db.exec(sql);

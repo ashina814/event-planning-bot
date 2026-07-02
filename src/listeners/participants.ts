@@ -45,7 +45,9 @@ export function registerParticipantsListeners(client: Client): void {
 
   client.on(Events.MessageDelete, async (message) => {
     try {
-      await createService(client).handleMessageChange(message);
+      const service = createService(client);
+      await service.handleTargetMessageDelete(message);
+      await service.handleMessageChange(message);
     } catch (error) {
       logger.error({ error }, "participant message delete handling failed");
     }

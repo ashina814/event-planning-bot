@@ -54,6 +54,13 @@ export class JobsRepo {
       .all(now) as ScheduledJobRecord[];
   }
 
+  hasPendingKind(kind: string): boolean {
+    const row = this.db
+      .prepare("SELECT 1 AS found FROM scheduled_jobs WHERE kind = ? AND status = 'pending' LIMIT 1")
+      .get(kind) as { found: number } | undefined;
+    return Boolean(row);
+  }
+
   markFired(id: number, now: number): void {
     this.db
       .prepare("UPDATE scheduled_jobs SET status = 'fired', fired_at = ?, error = NULL WHERE id = ?")
@@ -95,6 +102,19 @@ export class JobsRepo {
            AND status = 'pending'`
       )
       .run(threadId);
+    return result.changes;
+  }
+
+  cancelPendingByPayloadId(kind: string, payloadKey: string, payloadValue: number): number {
+    const result = this.db
+      .prepare(
+        `UPDATE scheduled_jobs
+         SET status = 'cancelled', error = 'cancelled by update'
+         WHERE kind = ?
+           AND status = 'pending'
+           AND json_extract(payload, ?) = ?`
+      )
+      .run(kind, `$.${payloadKey}`, payloadValue);
     return result.changes;
   }
 }

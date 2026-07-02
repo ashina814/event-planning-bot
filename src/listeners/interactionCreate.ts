@@ -52,6 +52,7 @@ import {
   expenseDirections,
   roleTypes,
   type AnnouncementRecord,
+  type EventRecord,
   type EventStatus,
   type ExpenseCategory,
   type ExpenseDirection,
@@ -83,6 +84,7 @@ import {
   buildParticipantsPostChannelSelect,
   buildParticipantsClearConfirmComponents,
   buildParticipantsSetupGuideComponents,
+  buildOrphanEventSelect,
   buildRoleAssignUserSelect,
   buildRoleBulkComponents,
   buildRoleDeleteConfirm,
@@ -128,6 +130,7 @@ import {
   buildMinutesTodoAdoptModal,
   buildRoleAddModal,
   buildTodoAddModal,
+  buildTodoEditModal,
   buildTimerSetupModal,
   buildTimerShiftCustomModal
 } from "../ui/modals.js";
@@ -234,6 +237,24 @@ function setAnnouncementScheduledAt(sessionId: string, userId: string, scheduled
     scheduledAt,
     createdAt: Date.now()
   });
+}
+
+async function findOrphanEvents(client: Client, events: EventRecord[]): Promise<EventRecord[]> {
+  const orphans: EventRecord[] = [];
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    if (!event) {
+      continue;
+    }
+    const channel = await client.channels.fetch(event.thread_id).catch(() => null);
+    if (!channel) {
+      orphans.push(event);
+    }
+    if ((index + 1) % 5 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  return orphans;
 }
 
 function requireAnnouncementScheduledAt(sessionId: string, userId: string): number {
@@ -476,6 +497,18 @@ export function registerInteractionCreateListener(client: Client): void {
 
           if (action === "roles") {
             await interaction.showModal(buildAdminRolesModal(settings));
+            return;
+          }
+
+          if (action === "orphans") {
+            await interaction.deferReply({ ephemeral: true });
+            const orphans = await findOrphanEvents(interaction.client, repos.eventsRepo.listAll(1000));
+            await interaction.editReply({
+              content: orphans.length > 0
+                ? "スレッドが見つからないイベントです。削除するものを選んでください。"
+                : "孤児レコードは見つかりませんでした。",
+              components: buildOrphanEventSelect(orphans)
+            });
             return;
           }
         }
@@ -1532,6 +1565,15 @@ export function registerInteractionCreateListener(client: Client): void {
             throw new Error("ToDo ID が不正です。");
           }
 
+          if (action === "edit") {
+            const todo = repos.todosRepo.get(todoId);
+            if (!todo) {
+              throw new Error("ToDo が DB に見つかりません。");
+            }
+            await interaction.showModal(buildTodoEditModal(threadId, todo));
+            return;
+          }
+
           if (action === "toggle") {
             await interaction.deferReply({ ephemeral: true });
             const member = await fetchGuildMember(interaction);
@@ -1590,6 +1632,27 @@ export function registerInteractionCreateListener(client: Client): void {
         }
 
         const repos = createRepos(getDb());
+
+        if (namespace === "admin" && action === "orphan-delete") {
+          assertOwner(interaction.user.id);
+          await interaction.deferUpdate();
+          const event = repos.eventsRepo.get(value);
+          if (!event) {
+            await interaction.editReply({
+              content: "イベントは既に削除済みです。",
+              components: []
+            });
+            return;
+          }
+          repos.jobsRepo.cancelJobsByThread(event.thread_id);
+          repos.eventsRepo.delete(event.thread_id);
+          const orphans = await findOrphanEvents(interaction.client, repos.eventsRepo.listAll(1000));
+          await interaction.editReply({
+            content: `孤児イベント『${event.title}』を削除しました。`,
+            components: buildOrphanEventSelect(orphans)
+          });
+          return;
+        }
 
         if (namespace === "event" && action === "status-select") {
           if (!isEventStatus(value)) {
@@ -2364,6 +2427,33 @@ export function registerInteractionCreateListener(client: Client): void {
           );
           const todo = service.create(member, threadId, { content, assignee, dueDate });
           await interaction.editReply({
+            embeds: [buildTodoDetailEmbed(todo)],
+            components: buildTodoActions(threadId, todo)
+          });
+          return;
+        }
+
+        if (namespace === "todo" && action === "edit-submit") {
+          await interaction.deferReply({ ephemeral: true });
+          const todoId = Number(interaction.customId.split(":")[3] ?? 0);
+          if (!todoId) {
+            throw new Error("ToDo ID が不正です。");
+          }
+          const content = interaction.fields.getTextInputValue("content");
+          const dueDate = interaction.fields.getTextInputValue("due_date");
+          const member = await fetchGuildMember(interaction);
+          const repos = createRepos(getDb());
+          const service = new TodoService(
+            interaction.client,
+            repos.todosRepo,
+            repos.eventsRepo,
+            repos.rolesRepo,
+            repos.jobsRepo,
+            repos.settingsRepo
+          );
+          const todo = service.edit(member, todoId, { content, dueDate });
+          await interaction.editReply({
+            content: "ToDo を更新しました。",
             embeds: [buildTodoDetailEmbed(todo)],
             components: buildTodoActions(threadId, todo)
           });

@@ -177,6 +177,7 @@ export interface ParticipantsConfigRecord {
   post_target_channel: string | null;
   post_target_thread: string | null;
   deadline_at: number | null;
+  frozen: number;
 }
 
 export interface ParticipantsCountRecord {

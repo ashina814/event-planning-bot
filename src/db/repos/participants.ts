@@ -25,8 +25,8 @@ export class ParticipantsRepo {
       .prepare(
         `INSERT INTO participants_config (
           thread_id, mode, reaction_target_channel, reaction_target_msg,
-          reaction_emojis, post_target_channel, post_target_thread, deadline_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          reaction_emojis, post_target_channel, post_target_thread, deadline_at, frozen
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(thread_id) DO UPDATE SET
           mode = excluded.mode,
           reaction_target_channel = excluded.reaction_target_channel,
@@ -34,7 +34,8 @@ export class ParticipantsRepo {
           reaction_emojis = excluded.reaction_emojis,
           post_target_channel = excluded.post_target_channel,
           post_target_thread = excluded.post_target_thread,
-          deadline_at = excluded.deadline_at`
+          deadline_at = excluded.deadline_at,
+          frozen = 0`
       )
       .run(
         input.threadId,
@@ -112,6 +113,10 @@ export class ParticipantsRepo {
     });
 
     tx();
+  }
+
+  freezeConfig(threadId: string): void {
+    this.db.prepare("UPDATE participants_config SET frozen = 1 WHERE thread_id = ?").run(threadId);
   }
 
   incrementCount(

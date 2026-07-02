@@ -1,0 +1,1 @@
+ALTER TABLE participants_config ADD COLUMN frozen INTEGER NOT NULL DEFAULT 0;

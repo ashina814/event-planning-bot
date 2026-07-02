@@ -69,6 +69,28 @@ export class EventsRepo {
       .all(limit) as EventRecord[];
   }
 
+  listAll(limit = 1000): EventRecord[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM events
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(limit) as EventRecord[];
+  }
+
+  listStale(cutoffUpdatedAt: number, limit = 25): EventRecord[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM events
+         WHERE status IN ('planning', 'announcing')
+           AND updated_at <= ?
+         ORDER BY updated_at ASC
+         LIMIT ?`
+      )
+      .all(cutoffUpdatedAt, limit) as EventRecord[];
+  }
+
   listScheduledBetween(startAt: number, endAt: number, limit = 100): EventRecord[] {
     return this.db
       .prepare(

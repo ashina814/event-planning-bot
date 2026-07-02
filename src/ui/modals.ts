@@ -256,6 +256,34 @@ export function buildTodoAddModal(threadId: string): ModalBuilder {
     );
 }
 
+export function buildTodoEditModal(threadId: string, todo: TodoRecord): ModalBuilder {
+  const dueInput = new TextInputBuilder()
+    .setCustomId("due_date")
+    .setLabel("期限")
+    .setPlaceholder("任意。例: 明日 / 6/29 / 6/29 18:00")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+  if (todo.due_at) {
+    dueInput.setValue(new Date((todo.due_at + 9 * 60 * 60) * 1000).toISOString().slice(0, 16).replace("T", " "));
+  }
+
+  return new ModalBuilder()
+    .setCustomId(`todo:edit-submit:${threadId}:${todo.id}`)
+    .setTitle(`ToDo #${todo.id} 編集`)
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("content")
+          .setLabel("内容")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMaxLength(1000)
+          .setValue(todo.content.slice(0, 1000))
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(dueInput)
+    );
+}
+
 export function buildMinutesTodoAdoptModal(threadId: string, todo: TodoRecord): ModalBuilder {
   return new ModalBuilder()
     .setCustomId(`todo:minutes-adopt-submit:${threadId}:${todo.id}`)

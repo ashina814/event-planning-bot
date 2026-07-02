@@ -9,7 +9,9 @@ import type { SeriesRepo } from "../db/repos/series.js";
 import type { SettingsRepo } from "../db/repos/settings.js";
 import type { TimersRepo } from "../db/repos/timers.js";
 import type { TodosRepo } from "../db/repos/todos.js";
+import { config } from "../config.js";
 import { logger } from "../lib/logger.js";
+import { formatJstDate, unixNow } from "../lib/time.js";
 import { AnnouncementService } from "../features/announcement/service.js";
 import { EventLifecycleService } from "../features/event-lifecycle/service.js";
 import { syncEventArtifacts } from "../features/event-lifecycle/sync.js";
@@ -150,6 +152,17 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
       await service.handleProofTimeout(expenseId);
       return;
     }
+    case "stale_event_check": {
+      await sendStaleEventReport(deps);
+      const now = unixNow();
+      deps.jobsRepo.create({
+        kind: "stale_event_check",
+        payload: {},
+        fireAt: nextMondayTenJst(now),
+        now
+      });
+      return;
+    }
     case "event_reminder_retrospective": {
       const threadId = String(payload.threadId ?? "");
       const scheduledAt = payload.scheduledAt ? Number(payload.scheduledAt) : null;
@@ -172,6 +185,32 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
       logger.warn({ job }, "scheduled job kind has no handler yet");
       throw new Error(`handler not implemented: ${job.kind}`);
   }
+}
+
+async function sendStaleEventReport(deps: SchedulerDeps): Promise<void> {
+  const now = unixNow();
+  const staleEvents = deps.eventsRepo.listStale(now - 30 * 24 * 60 * 60, 25);
+  if (staleEvents.length === 0) {
+    return;
+  }
+
+  const user = await deps.client.users.fetch(config.ownerId).catch(() => null);
+  if (!user) {
+    return;
+  }
+
+  const lines = staleEvents.map((event) => {
+    const status = event.status === "planning" ? "企画中" : "告知中";
+    return `【${status}】${event.title} (最終更新 ${formatJstDate(event.updated_at)})`;
+  });
+  await user.send(
+    [
+      "30 日以上更新のないイベントがあります:",
+      ...lines,
+      "",
+      "続けるなら状態を進め、やめるなら【見送り】にしてください。"
+    ].join("\n")
+  );
 }
 
 async function startAnnouncementParticipantsIfEnabled(
@@ -240,4 +279,31 @@ function parseAnnouncementEmojis(announcement: AnnouncementRecord): ReactionEmoj
   } catch {
     return [];
   }
+}
+
+function nextMondayTenJst(now: number): number {
+  const jst = new Date((now + 9 * 60 * 60) * 1000);
+  const day = jst.getUTCDay();
+  let daysUntilMonday = (8 - day) % 7;
+  let candidate = Date.UTC(
+    jst.getUTCFullYear(),
+    jst.getUTCMonth(),
+    jst.getUTCDate() + daysUntilMonday,
+    1,
+    0,
+    0
+  ) / 1000;
+
+  if (candidate <= now) {
+    daysUntilMonday += 7;
+    candidate = Date.UTC(
+      jst.getUTCFullYear(),
+      jst.getUTCMonth(),
+      jst.getUTCDate() + daysUntilMonday,
+      1,
+      0,
+      0
+    ) / 1000;
+  }
+  return candidate;
 }

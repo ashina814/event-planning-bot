@@ -395,6 +395,7 @@ export function buildParticipantsPanelEmbed(
     .setDescription(
       [
         `方式: **${participantModeLabel(config)}**`,
+        config.frozen ? "状態: **停止中**" : "状態: **カウント中**",
         `対象: ${target}`,
         `締切: ${config.deadline_at ? formatJstDateTime(config.deadline_at) : "未設定"}`
       ].join("\n")

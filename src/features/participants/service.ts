@@ -407,6 +407,9 @@ export class ParticipantsService {
 
     const now = unixNow();
     for (const config of configs) {
+      if (config.frozen) {
+        continue;
+      }
       const label = this.labelForReaction(config, fullReaction);
       if (!label) {
         continue;
@@ -442,6 +445,9 @@ export class ParticipantsService {
 
     const now = unixNow();
     for (const config of configs) {
+      if (config.frozen) {
+        continue;
+      }
       const label = this.labelForReaction(config, fullReaction);
       if (!label) {
         continue;
@@ -460,7 +466,28 @@ export class ParticipantsService {
     const channelId = message.channelId;
     const configs = this.participantsRepo.findPostConfigs(channelId);
     for (const config of configs) {
+      if (config.frozen) {
+        continue;
+      }
       await this.recountPostConfig(config.thread_id);
+    }
+  }
+
+  async handleTargetMessageDelete(message: Message | PartialMessage): Promise<void> {
+    const configs = this.participantsRepo
+      .findReactionConfigs(message.id)
+      .filter((config) => config.reaction_target_channel === message.channelId);
+    for (const config of configs) {
+      if (config.frozen) {
+        continue;
+      }
+      this.participantsRepo.freezeConfig(config.thread_id);
+      const thread = await this.client.channels.fetch(config.thread_id).catch(() => null);
+      if (thread && "send" in thread) {
+        await thread.send(
+          "参加者カウントの対象メッセージが削除されました。カウントを停止しています。[参加者] から再設定してください。"
+        );
+      }
     }
   }
 

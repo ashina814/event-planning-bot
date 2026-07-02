@@ -17,6 +17,11 @@ interface CreateTodoInput {
   dueDate: string;
 }
 
+interface EditTodoInput {
+  content: string;
+  dueDate: string;
+}
+
 export class TodoPermissionError extends Error {
   override name = "TodoPermissionError";
 }
@@ -146,6 +151,29 @@ export class TodoService {
     const todo = this.requireTodo(todoId);
     this.assertCanTouch(member, todo);
     this.todosRepo.setStatus(todoId, done ? "done" : "open", unixNow());
+    return this.requireTodo(todoId);
+  }
+
+  edit(member: GuildMember, todoId: number, input: EditTodoInput): TodoRecord {
+    const todo = this.requireTodo(todoId);
+    this.assertCanTouch(member, todo);
+    const content = input.content.trim();
+    if (!content) {
+      throw new Error("ToDo の内容が空です。");
+    }
+
+    const dueAt = this.parseDueDate(input.dueDate);
+    this.todosRepo.updateContentAndDue(todoId, content, dueAt);
+    this.jobsRepo.cancelPendingByPayloadId("todo_due_reminder", "todoId", todoId);
+    if (dueAt && todo.thread_id) {
+      this.jobsRepo.create({
+        kind: "todo_due_reminder",
+        payload: { todoId },
+        threadId: todo.thread_id,
+        fireAt: dueAt,
+        now: unixNow()
+      });
+    }
     return this.requireTodo(todoId);
   }
 

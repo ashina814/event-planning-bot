@@ -1032,6 +1032,11 @@ export function buildTodoActions(threadId: string, todo: TodoRecord): ActionRowB
         .setLabel(todo.status === "done" ? "未完了に戻す" : "完了")
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
+        .setCustomId(`todo:edit:${threadId}:${todo.id}`)
+        .setEmoji("✏️")
+        .setLabel("編集")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
         .setCustomId(`todo:delete:${threadId}:${todo.id}`)
         .setEmoji("🗑️")
         .setLabel("削除")
@@ -1188,6 +1193,34 @@ export function buildAdminPanelComponents(): ActionRowBuilder<ButtonBuilder>[] {
         .setEmoji("🛡️")
         .setLabel("ロール")
         .setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("admin:orphans:panel")
+        .setEmoji("🧹")
+        .setLabel("孤児レコード整理")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildOrphanEventSelect(events: EventRecord[]): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  if (events.length === 0) {
+    return [];
+  }
+
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("admin:orphan-delete:panel")
+        .setPlaceholder("削除する孤児イベントを選択")
+        .addOptions(
+          events.slice(0, 25).map((event) => ({
+            label: event.title.slice(0, 100),
+            value: event.thread_id,
+            description: event.thread_id
+          }))
+        )
     )
   ];
 }

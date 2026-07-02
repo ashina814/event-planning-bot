@@ -133,7 +133,8 @@ CREATE TABLE IF NOT EXISTS participants_config (
   reaction_emojis TEXT,
   post_target_channel TEXT,
   post_target_thread  TEXT,
-  deadline_at     INTEGER
+  deadline_at     INTEGER,
+  frozen          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS participants_count_cache (

@@ -34,6 +34,11 @@ registerParticipantsListeners(client);
 registerTodoListeners(client);
 registerExpenseListeners(client);
 
+client.once(Events.ClientReady, () => {
+  scheduler.ensureStaleEventCheckScheduled();
+  void reportOrphanEventThreads();
+});
+
 client.on(Events.Error, (error) => {
   logger.error({ error }, "discord client error");
 });
@@ -42,6 +47,46 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 await client.login(config.discordToken);
+
+async function reportOrphanEventThreads(): Promise<void> {
+  const orphans = [];
+  const events = repos.eventsRepo.listAll(1000);
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    if (!event) {
+      continue;
+    }
+    const channel = await client.channels.fetch(event.thread_id).catch(() => null);
+    if (!channel) {
+      orphans.push(event);
+    }
+    if ((index + 1) % 5 === 0) {
+      await sleep(1000);
+    }
+  }
+
+  if (orphans.length === 0) {
+    return;
+  }
+
+  const owner = await client.users.fetch(config.ownerId).catch(() => null);
+  if (!owner) {
+    return;
+  }
+
+  await owner.send(
+    [
+      "以下のイベントのスレッドが見つかりません:",
+      ...orphans.slice(0, 25).map((event) => `- ${event.title} (${event.thread_id})`),
+      "",
+      "削除するには /admin から整理してください。"
+    ].join("\n")
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function shutdown(): void {
   logger.info("shutting down");

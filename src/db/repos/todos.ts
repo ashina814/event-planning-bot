@@ -101,6 +101,12 @@ export class TodosRepo {
       .run(status, status, now, id);
   }
 
+  updateContentAndDue(id: number, content: string, dueAt: number | null): void {
+    this.db
+      .prepare("UPDATE todos SET content = ?, due_at = ? WHERE id = ?")
+      .run(content, dueAt, id);
+  }
+
   delete(id: number): void {
     this.db.prepare("DELETE FROM todos WHERE id = ?").run(id);
   }
