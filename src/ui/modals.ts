@@ -305,6 +305,37 @@ export function buildExpenseCreateModal(
     );
 }
 
+export function buildExpenseProofModal(
+  threadKey: string,
+  targetChannelId: string,
+  targetMessageId: string,
+  category: ExpenseCategory,
+  direction: ExpenseDirection
+): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`expense:proof-submit:${threadKey}:${targetChannelId}:${targetMessageId}:${category}:${direction}`)
+    .setTitle("出費記録")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("amount")
+          .setLabel("金額 Land")
+          .setPlaceholder("例: 18000")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("memo")
+          .setLabel("メモ")
+          .setPlaceholder("任意。用途や補足")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false)
+          .setMaxLength(1000)
+      )
+    );
+}
+
 export function buildExpenseCorrectModal(threadId: string, expense: ExpenseRecord): ModalBuilder {
   const recipientInput = new TextInputBuilder()
     .setCustomId("recipient")

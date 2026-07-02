@@ -10,8 +10,8 @@ import { parseDiscordSnowflake } from "../../lib/parser.js";
 import {
   formatJstDate,
   formatJstPlainDate,
-  jstDateTimeToUnix,
   jstDateToUnixAtMidnight,
+  parseFlexibleDateTime,
   unixNow
 } from "../../lib/time.js";
 import type {
@@ -33,6 +33,17 @@ interface CreateExpenseInput {
 interface CorrectExpenseInput {
   amount: string;
   recipient: string;
+  memo: string;
+}
+
+interface CreateExpenseFromProofInput {
+  threadId: string | null;
+  targetChannelId: string;
+  targetMessageId: string;
+  category: string;
+  direction: string;
+  amount: string;
+  recipientId: string | null;
   memo: string;
 }
 
@@ -174,6 +185,46 @@ export class ExpenseService {
     return corrected;
   }
 
+  async createFromProof(
+    member: GuildMember,
+    input: CreateExpenseFromProofInput
+  ): Promise<ExpenseRecord> {
+    const event = input.threadId ? this.requireEvent(input.threadId) : null;
+    if (event) {
+      const roles = this.rolesRepo.list(event.thread_id);
+      this.assertCanRecord(member, roles);
+    } else if (!isEventLead(member, this.settingsRepo)) {
+      throw new ExpensePermissionError("イベント外の出費記録はイベント統括のみ可能です。");
+    }
+
+    const category = parseExpenseCategory(input.category);
+    const direction = parseExpenseDirection(input.direction);
+    const amount = parseAmount(input.amount);
+    const proofUrl = await this.fetchProofImageUrl(input.targetChannelId, input.targetMessageId);
+    const now = unixNow();
+    const id = this.expensesRepo.create({
+      threadId: input.threadId,
+      category,
+      amount,
+      direction,
+      recipientId: input.recipientId,
+      responderId: member.id,
+      memo: input.memo.trim() || null,
+      occurredAt: now,
+      proofUrl,
+      proofMsgId: input.targetMessageId,
+      proofStatus: "attached",
+      now
+    });
+
+    const expense = this.requireExpense(id);
+    await this.postExpenseLog(expense);
+    if (event) {
+      await this.checkThresholds(event, expense);
+    }
+    return expense;
+  }
+
   async handleProofMessage(message: Message): Promise<void> {
     if (message.author.bot) {
       return;
@@ -230,6 +281,19 @@ export class ExpenseService {
     await channel.send({
       content: buildExpenseLogMessage(event, expense)
     });
+  }
+
+  private async fetchProofImageUrl(targetChannelId: string, targetMessageId: string): Promise<string> {
+    const channel = await this.client.channels.fetch(targetChannelId);
+    if (!channel || !("messages" in channel)) {
+      throw new Error("証明画像のメッセージを取得できませんでした。");
+    }
+    const message = await channel.messages.fetch(targetMessageId);
+    const proofUrl = firstImageUrl(message);
+    if (!proofUrl) {
+      throw new Error("画像が添付されたメッセージを選んでください。");
+    }
+    return proofUrl;
   }
 
   private async postExpenseNotice(content: string): Promise<void> {
@@ -371,15 +435,7 @@ function parseOccurredMemo(input: string): { occurredAt: number; memo: string | 
   const date = lines[0] ?? formatJstPlainDate(unixNow());
   const memo = lines.slice(1).join("\n") || null;
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return { occurredAt: jstDateToUnixAtMidnight(date), memo };
-  }
-
-  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/.test(date)) {
-    return { occurredAt: jstDateTimeToUnix(date), memo };
-  }
-
-  throw new Error("発生日は YYYY-MM-DD または YYYY-MM-DD HH:mm で入力してください。");
+  return { occurredAt: parseFlexibleDateTime(date), memo };
 }
 
 function firstImageUrl(message: Message): string | null {

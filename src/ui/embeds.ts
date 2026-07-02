@@ -505,7 +505,8 @@ export function buildExpensePanelEmbed(
       [
         `出費合計: **${totalOut.toLocaleString("ja-JP")} Land**`,
         `補填・返金合計: **${totalIn.toLocaleString("ja-JP")} Land**`,
-        `証明画像待ち: **${pendingProofCount} 件**`
+        `証明画像待ち: **${pendingProofCount} 件**`,
+        "画像を先に投稿して右クリック → アプリ → 出費として記録、から登録するのが早いです。"
       ].join("\n")
     );
 

@@ -7,10 +7,10 @@ import type { SeriesRepo } from "../../db/repos/series.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
 import type { TimersRepo } from "../../db/repos/timers.js";
 import { isEventLead } from "../../lib/permission.js";
+import { parseTimetable } from "../../lib/parser.js";
 import {
   formatJstPlainDate,
   formatJstTime,
-  jstDateTimeToUnix,
   unixNow
 } from "../../lib/time.js";
 import type {
@@ -21,11 +21,6 @@ import type {
 } from "../../types/index.js";
 import { buildTimerNotificationComponents } from "../../ui/buttons.js";
 import { syncEventArtifacts } from "../event-lifecycle/sync.js";
-
-interface ParsedTimerLine {
-  name: string;
-  plannedStart: number;
-}
 
 interface TimerSetupInput {
   notifyChannel: string | null;
@@ -75,7 +70,10 @@ export class TimekeeperService {
     const roles = this.rolesRepo.list(threadId);
     this.assertCanOperate(member, roles);
 
-    const parsed = this.parseTimetable(event, input.timetable);
+    const baseDate = event.scheduled_at
+      ? formatJstPlainDate(event.scheduled_at)
+      : formatJstPlainDate(unixNow());
+    const parsed = parseTimetable(input.timetable, baseDate);
     if (parsed.length < 1) {
       throw new Error("タイムテーブルを 1 行以上入力してください。");
     }
@@ -323,35 +321,6 @@ export class TimekeeperService {
         now
       );
     }
-  }
-
-  private parseTimetable(event: EventRecord, input: string): ParsedTimerLine[] {
-    const baseDate = event.scheduled_at
-      ? formatJstPlainDate(event.scheduled_at)
-      : formatJstPlainDate(unixNow());
-
-    return input
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        const match = line.match(/^(\d{1,2}):(\d{2})\s+(.+)$/);
-        if (!match) {
-          throw new Error(`タイムテーブル行の形式が不正です: ${line}`);
-        }
-        const hour = match[1]?.padStart(2, "0");
-        const minute = match[2];
-        const name = match[3]?.trim();
-        if (!hour || !minute || !name) {
-          throw new Error(`タイムテーブル行の形式が不正です: ${line}`);
-        }
-
-        return {
-          name,
-          plannedStart: jstDateTimeToUnix(`${baseDate} ${hour}:${minute}`)
-        };
-      })
-      .sort((a, b) => a.plannedStart - b.plannedStart);
   }
 
   private timerMention(schedule: TimerScheduleRecord): string {

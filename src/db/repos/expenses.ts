@@ -8,7 +8,7 @@ import type {
 } from "../../types/index.js";
 
 interface CreateExpenseInput {
-  threadId: string;
+  threadId: string | null;
   category: ExpenseCategory;
   amount: number;
   direction: ExpenseDirection;

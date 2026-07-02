@@ -1,4 +1,5 @@
 import type { EventStatus } from "../types/index.js";
+import { jstDateTimeToUnix } from "./time.js";
 
 const prefixes: Record<EventStatus, string> = {
   planning: "【企画中】",
@@ -40,4 +41,69 @@ export function parseDiscordSnowflake(input: string, position: "first" | "last" 
 export function normalizeOptionalText(value: string): string | null {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+export interface ParsedTimetableLine {
+  name: string;
+  plannedStart: number;
+}
+
+export function parseTimetable(input: string, baseDate: string): ParsedTimetableLine[] {
+  const lines = input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let dayOffset = 0;
+  let previousMinuteOfDay: number | null = null;
+
+  return lines.map((line) => {
+    const match = line.match(/^(\d{1,2}):(\d{1,2})\s+(.+)$/);
+    if (!match) {
+      throw new Error(`タイムテーブル行の形式が不正です: ${line}`);
+    }
+
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    const name = match[3]?.trim();
+    if (
+      !name ||
+      !Number.isInteger(hour) ||
+      !Number.isInteger(minute) ||
+      hour < 0 ||
+      hour > 23 ||
+      minute < 0 ||
+      minute > 59
+    ) {
+      throw new Error(`タイムテーブル行の形式が不正です: ${line}`);
+    }
+
+    const minuteOfDay = hour * 60 + minute;
+    if (previousMinuteOfDay !== null && minuteOfDay < previousMinuteOfDay) {
+      dayOffset += 1;
+    }
+    previousMinuteOfDay = minuteOfDay;
+
+    const date = addDaysToPlainDate(baseDate, dayOffset);
+    return {
+      name,
+      plannedStart: jstDateTimeToUnix(
+        `${date} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`
+      )
+    };
+  });
+}
+
+function addDaysToPlainDate(plainDate: string, offset: number): string {
+  if (offset === 0) {
+    return plainDate;
+  }
+
+  const match = plainDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    throw new Error("baseDate must be YYYY-MM-DD");
+  }
+
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + offset));
+  return date.toISOString().slice(0, 10);
 }

@@ -13,6 +13,13 @@ import {
   setAnnouncementDraftTargetChannel
 } from "../commands/register-announcement.js";
 import {
+  consumeExpenseProofDraft,
+  createExpenseProofDraft,
+  handleRecordExpenseCommand,
+  RECORD_EXPENSE_COMMAND_JA_NAME,
+  RECORD_EXPENSE_COMMAND_NAME
+} from "../commands/record-expense.js";
+import {
   handleSetParticipantsTargetCommand,
   SET_PARTICIPANTS_TARGET_COMMAND_JA_NAME,
   SET_PARTICIPANTS_TARGET_COMMAND_NAME
@@ -66,7 +73,10 @@ import {
   buildExpenseCategorySelect,
   buildExpenseDirectionSelect,
   buildExpensePanelComponents,
+  buildExpenseProofCategorySelect,
+  buildExpenseProofRecipientSelect,
   buildExpenseVoidConfirmComponents,
+  expenseCategoryChoiceToCategoryDirection,
   buildHandoverRoleSelect,
   buildMinutesTodoCandidateComponents,
   buildMinutesTodoReviewComponents,
@@ -111,6 +121,7 @@ import {
   buildEventScheduleModal,
   buildExpenseCreateModal,
   buildExpenseCorrectModal,
+  buildExpenseProofModal,
   buildHandoverModal,
   buildMinutesTodoAdoptModal,
   buildRoleAddModal,
@@ -419,6 +430,14 @@ export function registerInteractionCreateListener(client: Client): void {
           interaction.commandName === SET_PARTICIPANTS_TARGET_COMMAND_JA_NAME
         ) {
           await handleSetParticipantsTargetCommand(interaction);
+          return;
+        }
+
+        if (
+          interaction.commandName === RECORD_EXPENSE_COMMAND_NAME ||
+          interaction.commandName === RECORD_EXPENSE_COMMAND_JA_NAME
+        ) {
+          await handleRecordExpenseCommand(interaction);
           return;
         }
         return;
@@ -1257,9 +1276,38 @@ export function registerInteractionCreateListener(client: Client): void {
         }
 
         if (namespace === "expense") {
+          if (action === "proof-skip") {
+            await interaction.deferUpdate();
+            const member = await fetchGuildMember(interaction);
+            const draft = consumeExpenseProofDraft(threadId, interaction.user.id);
+            const service = new ExpenseService(
+              interaction.client,
+              repos.expensesRepo,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.jobsRepo,
+              repos.settingsRepo
+            );
+            const expense = await service.createFromProof(member, {
+              threadId: draft.threadId,
+              targetChannelId: draft.targetChannelId,
+              targetMessageId: draft.targetMessageId,
+              category: draft.category,
+              direction: draft.direction,
+              amount: draft.amount,
+              recipientId: null,
+              memo: draft.memo
+            });
+            await interaction.editReply({
+              content: `出費 #${expense.id} を記録しました。`,
+              components: []
+            });
+            return;
+          }
+
           if (action === "new") {
             await interaction.reply({
-              content: "出費カテゴリを選んでください。",
+              content: "画像を先に投稿して右クリック → アプリ → 出費として記録、から登録するのが早いです。手入力する場合はカテゴリを選んでください。",
               components: buildExpenseCategorySelect(threadId),
               ephemeral: true
             });
@@ -1540,13 +1588,43 @@ export function registerInteractionCreateListener(client: Client): void {
         }
 
         if (namespace === "expense" && action === "new-category") {
-          if (!isExpenseCategory(value)) {
+          const choice = expenseCategoryChoiceToCategoryDirection(value);
+          if (!choice) {
             throw new Error("未知の出費カテゴリです。");
           }
+          await interaction.showModal(buildExpenseCreateModal(threadId, choice.category, choice.direction));
+          return;
+        }
+
+        if (namespace === "expense" && action === "proof-event") {
+          const targetChannelId = threadId;
+          const targetMessageId = parts[3];
+          if (!targetMessageId) {
+            throw new Error("証明画像メッセージの情報が不完全です。");
+          }
           await interaction.update({
-            content: "出費か補填・返金かを選んでください。",
-            components: buildExpenseDirectionSelect(threadId, value)
+            content: value === "external" ? "イベント外の出費として記録します。カテゴリを選んでください。" : "カテゴリを選んでください。",
+            components: buildExpenseProofCategorySelect(value, targetChannelId, targetMessageId)
           });
+          return;
+        }
+
+        if (namespace === "expense" && action === "proof-category") {
+          const targetChannelId = parts[3];
+          const targetMessageId = parts[4];
+          const choice = expenseCategoryChoiceToCategoryDirection(value);
+          if (!targetChannelId || !targetMessageId || !choice) {
+            throw new Error("出費記録の入力情報が不完全です。");
+          }
+          await interaction.showModal(
+            buildExpenseProofModal(
+              threadId,
+              targetChannelId,
+              targetMessageId,
+              choice.category,
+              choice.direction
+            )
+          );
           return;
         }
 
@@ -1693,6 +1771,37 @@ export function registerInteractionCreateListener(client: Client): void {
 
       if (interaction.isUserSelectMenu()) {
         const [namespace, action, threadId, roleType] = interaction.customId.split(":");
+        if (namespace === "expense" && action === "proof-recipient" && threadId) {
+          const recipientId = interaction.values[0] ?? null;
+          await interaction.deferUpdate();
+          const member = await fetchGuildMember(interaction);
+          const draft = consumeExpenseProofDraft(threadId, interaction.user.id);
+          const repos = createRepos(getDb());
+          const service = new ExpenseService(
+            interaction.client,
+            repos.expensesRepo,
+            repos.eventsRepo,
+            repos.rolesRepo,
+            repos.jobsRepo,
+            repos.settingsRepo
+          );
+          const expense = await service.createFromProof(member, {
+            threadId: draft.threadId,
+            targetChannelId: draft.targetChannelId,
+            targetMessageId: draft.targetMessageId,
+            category: draft.category,
+            direction: draft.direction,
+            amount: draft.amount,
+            recipientId,
+            memo: draft.memo
+          });
+          await interaction.editReply({
+            content: `出費 #${expense.id} を記録しました。`,
+            components: []
+          });
+          return;
+        }
+
         if (namespace === "role" && action === "bulk-select" && threadId && roleType) {
           const userId = interaction.values[0];
           if (!userId) {
@@ -2018,6 +2127,43 @@ export function registerInteractionCreateListener(client: Client): void {
                 ]
               : [],
             components: buildExpensePanelComponents(threadId, panel.expenses)
+          });
+          return;
+        }
+
+        if (namespace === "expense" && action === "proof-submit") {
+          const customIdParts = interaction.customId.split(":");
+          const threadKey = customIdParts[2];
+          const targetChannelId = customIdParts[3];
+          const targetMessageId = customIdParts[4];
+          const rawCategory = customIdParts[5];
+          const rawDirection = customIdParts[6];
+          if (!threadKey || !targetChannelId || !targetMessageId) {
+            throw new Error("出費記録の入力情報が不完全です。");
+          }
+          if (!rawCategory || !isExpenseCategory(rawCategory)) {
+            throw new Error("未知の出費カテゴリです。");
+          }
+          if (!rawDirection || !isExpenseDirection(rawDirection)) {
+            throw new Error("未知の出費方向です。");
+          }
+
+          const amount = interaction.fields.getTextInputValue("amount");
+          const memo = interaction.fields.getTextInputValue("memo");
+          const sessionId = createExpenseProofDraft({
+            userId: interaction.user.id,
+            threadId: threadKey === "external" ? null : threadKey,
+            targetChannelId,
+            targetMessageId,
+            category: rawCategory,
+            direction: rawDirection,
+            amount,
+            memo
+          });
+          await interaction.reply({
+            content: "対象者を選択してください。不要ならスキップできます。",
+            components: buildExpenseProofRecipientSelect(sessionId),
+            ephemeral: true
           });
           return;
         }

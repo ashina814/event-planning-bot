@@ -14,6 +14,8 @@ import {
   type AnnouncementRecord,
   type EventRecord,
   type EventStatus,
+  type ExpenseCategory,
+  type ExpenseDirection,
   type ExpenseRecord,
   type RoleSlot,
   type RoleType,
@@ -361,13 +363,108 @@ export function buildExpenseCategorySelect(threadId: string): ActionRowBuilder<S
         .setCustomId(`expense:new-category:${threadId}`)
         .setPlaceholder("出費カテゴリを選択")
         .addOptions(
-          expenseCategories.map((category) => ({
+          ...expenseCategories.map((category) => ({
             label: expenseCategoryLabels[category] ?? category,
             value: category
-          }))
+          })),
+          {
+            label: "補填・返金",
+            value: "reimbursement",
+            description: "入金として記録"
+          }
         )
     )
   ];
+}
+
+export function buildExpenseProofEventSelect(
+  targetChannelId: string,
+  targetMessageId: string,
+  events: EventRecord[],
+  includeExternal: boolean
+): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  const options: Array<{ label: string; value: string; description?: string }> = events.slice(0, includeExternal ? 24 : 25).map((event) => ({
+    label: event.title.slice(0, 100),
+    value: event.thread_id,
+    description: event.scheduled_at
+      ? `開催 ${formatJstDateTime(event.scheduled_at)}`.slice(0, 100)
+      : "開催日時未定"
+  }));
+
+  if (includeExternal) {
+    options.push({
+      label: "イベント外の出費",
+      value: "external",
+      description: "イベントに紐付けず記録"
+    });
+  }
+
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`expense:proof-event:${targetChannelId}:${targetMessageId}`)
+        .setPlaceholder("紐付けるイベントを選択")
+        .addOptions(options)
+    )
+  ];
+}
+
+export function buildExpenseProofCategorySelect(
+  threadKey: string,
+  targetChannelId: string,
+  targetMessageId: string
+): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`expense:proof-category:${threadKey}:${targetChannelId}:${targetMessageId}`)
+        .setPlaceholder("出費カテゴリを選択")
+        .addOptions(
+          ...expenseCategories.map((category) => ({
+            label: expenseCategoryLabels[category] ?? category,
+            value: category
+          })),
+          {
+            label: "補填・返金",
+            value: "reimbursement",
+            description: "入金として記録"
+          }
+        )
+    )
+  ];
+}
+
+export function buildExpenseProofRecipientSelect(
+  sessionId: string
+): Array<ActionRowBuilder<UserSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>> {
+  return [
+    new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+      new UserSelectMenuBuilder()
+        .setCustomId(`expense:proof-recipient:${sessionId}`)
+        .setPlaceholder("対象者を選択")
+        .setMinValues(1)
+        .setMaxValues(1)
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`expense:proof-skip:${sessionId}`)
+        .setLabel("対象者なしで保存")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function expenseCategoryChoiceToCategoryDirection(value: string): {
+  category: ExpenseCategory;
+  direction: ExpenseDirection;
+} | null {
+  if (value === "reimbursement") {
+    return { category: "other", direction: "in" };
+  }
+  if ((expenseCategories as readonly string[]).includes(value)) {
+    return { category: value as ExpenseCategory, direction: "out" };
+  }
+  return null;
 }
 
 export function buildRoleTypeSelect(threadId: string): ActionRowBuilder<StringSelectMenuBuilder>[] {
