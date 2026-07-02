@@ -141,6 +141,7 @@ export function buildAdminPanelEmbed(settings: BotSettings): EmbedBuilder {
           settingLine("イベントフォーラム", settings.eventForum),
           settingLine("公式告知", settings.eventAnnounce),
           settingLine("内部お知らせ", settings.internalAnnounce),
+          settingLine("統括専用", settings.leadOnly),
           settingLine("出費ログ", settings.expenseLog),
           settingLine("議事録", settings.minutes),
           settingLine("自由チャット", settings.freeChat),

@@ -109,6 +109,9 @@ export function buildAdminChannels1Modal(settings: BotSettings): ModalBuilder {
         settingInput("internalAnnounce", "内部お知らせ", settings.internalAnnounce)
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
+        settingInput("leadOnly", "統括専用", settings.leadOnly)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
         settingInput("expenseLog", "出費ログ", settings.expenseLog)
       )
     );
@@ -144,6 +147,106 @@ export function buildAdminRolesModal(settings: BotSettings): ModalBuilder {
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         settingInput("eventerRole", "イベンターロール", settings.eventerRole, true)
+      )
+    );
+}
+
+export function buildRewardRoleRateModal(roleLabel = "", amount: number | null = null): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId("reward:role-rate-submit:panel")
+    .setTitle("役割単価")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("role_label")
+          .setLabel("役割名")
+          .setValue(roleLabel)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("amount")
+          .setLabel("単価 Land")
+          .setValue(amount === null ? "" : String(amount))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("enabled")
+          .setLabel("有効 yes/no")
+          .setValue("yes")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      )
+    );
+}
+
+export function buildRewardGradeModal(
+  name = "",
+  amount: number | null = null,
+  monthlyCap: number | null = null
+): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId("reward:grade-submit:panel")
+    .setTitle("基本給グレード")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("name")
+          .setLabel("グレード名")
+          .setValue(name)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("amount")
+          .setLabel("基本給 Land")
+          .setValue(amount === null ? "" : String(amount))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("monthly_cap")
+          .setLabel("月上限 Land (空なら上限なし)")
+          .setValue(monthlyCap === null ? "" : String(monthlyCap))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+      )
+    );
+}
+
+export function buildRewardScaleMultiplierModal(scale: string, current: number): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`reward:scale-submit:panel:${scale}`)
+    .setTitle("規模倍率")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("multiplier")
+          .setLabel("倍率")
+          .setValue(String(current))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      )
+    );
+}
+
+export function buildContributionNoteModal(): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId("reward:contribution-submit:panel")
+    .setTitle("貢献メモ")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("note")
+          .setLabel("メモ")
+          .setPlaceholder("例: 新人向けに企画書の作り方をサポート")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false)
       )
     );
 }

@@ -30,6 +30,7 @@ export const settingKeys = [
   "eventForum",
   "eventAnnounce",
   "internalAnnounce",
+  "leadOnly",
   "expenseLog",
   "minutes",
   "freeChat",

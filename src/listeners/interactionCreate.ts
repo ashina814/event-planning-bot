@@ -39,11 +39,12 @@ import {
 } from "../features/help/index.js";
 import { OverviewService } from "../features/overview/service.js";
 import { ParticipantsService } from "../features/participants/service.js";
+import { RewardsService, type RewardSettingsSummary } from "../features/rewards/service.js";
 import { EventRolesService } from "../features/roles/service.js";
 import { TodoService } from "../features/todo/service.js";
 import { TimekeeperService } from "../features/timekeeper/service.js";
 import { listAuditLog, logAudit, type AuditLogRecord } from "../lib/audit.js";
-import { assertLeadOrSub, fetchGuildMember, PermissionError } from "../lib/permission.js";
+import { assertLead, assertLeadOrSub, fetchGuildMember, isEventLead, PermissionError } from "../lib/permission.js";
 import { parseDiscordUserId } from "../lib/parser.js";
 import { formatJstDateTime, jstDateTimeToUnix, unixNow } from "../lib/time.js";
 import { logger } from "../lib/logger.js";
@@ -81,6 +82,10 @@ import {
   buildExpenseProofCategorySelect,
   buildExpenseProofRecipientSelect,
   buildExpenseVoidConfirmComponents,
+  buildContributionDeleteSelect,
+  buildContributionEventSelect,
+  buildContributionRoleSelect,
+  buildContributionUserSelect,
   expenseCategoryChoiceToCategoryDirection,
   buildHandoverRoleSelect,
   buildMinutesTodoCandidateComponents,
@@ -97,6 +102,12 @@ import {
   buildParticipantsPanelComponents,
   buildRoleTypeSelect,
   buildRoleUserSelect,
+  buildRewardGradeChoiceSelect,
+  buildRewardGradeSelect,
+  buildRewardRoleSelect,
+  buildRewardScaleSelect,
+  buildRewardSettingsComponents,
+  buildRewardUserGradeSelect,
   buildScaleSelect,
   buildStatusSelect,
   buildStatusRollbackConfirmComponents,
@@ -131,8 +142,12 @@ import {
   buildExpenseCreateModal,
   buildExpenseCorrectModal,
   buildExpenseProofModal,
+  buildContributionNoteModal,
   buildHandoverModal,
   buildMinutesTodoAdoptModal,
+  buildRewardGradeModal,
+  buildRewardRoleRateModal,
+  buildRewardScaleMultiplierModal,
   buildRoleAddModal,
   buildTodoAddModal,
   buildTodoEditModal,
@@ -176,6 +191,15 @@ interface RoleBulkSession {
 
 const roleBulkSessions = new Map<string, RoleBulkSession>();
 const ROLE_BULK_SESSION_TTL_MS = 10 * 60 * 1000;
+
+interface ContributionSession {
+  roleLabel?: string;
+  userId?: string;
+  threadId?: string | null;
+}
+
+const contributionSessions = new Map<string, ContributionSession>();
+const userGradeSessions = new Map<string, { userId: string }>();
 
 function roleBulkSessionKey(userId: string, threadId: string): string {
   return `${userId}:${threadId}`;
@@ -344,6 +368,60 @@ function buildAuditLogContent(page: number, rows: AuditLogRecord[]): string {
     return `• ${formatJstDateTime(row.ts)} / ${row.action} / <@${row.actor_id}> / ${target}`;
   });
   return [header, ...lines].join("\n").slice(0, 1900);
+}
+
+function buildRewardSettingsContent(summary: RewardSettingsSummary): string {
+  const roleLines = summary.roleRewards
+    .slice(0, 12)
+    .map((reward) => `• ${reward.enabled ? "" : "[無効] "}${reward.role_label}: ${reward.amount.toLocaleString("ja-JP")} Land`);
+  const gradeLines = summary.grades
+    .map((grade) => `• ${grade.name}: ${grade.amount.toLocaleString("ja-JP")} Land / 上限 ${grade.monthly_cap?.toLocaleString("ja-JP") ?? "なし"}`);
+  const scaleLines = Object.entries(summary.scaleMultipliers)
+    .map(([scale, value]) => `• ${scale}: ${value}`);
+
+  return [
+    "支給設定",
+    "",
+    "[役割単価]",
+    ...roleLines,
+    "",
+    "[基本給グレード]",
+    ...gradeLines,
+    "",
+    "[規模倍率]",
+    ...scaleLines
+  ].join("\n").slice(0, 1900);
+}
+
+function rewardService(repos: ReturnType<typeof createRepos>): RewardsService {
+  return new RewardsService(getDb(), repos.settingsRepo, repos.eventsRepo);
+}
+
+function canManageRewardSettings(userId: string, member: GuildMember, repos: ReturnType<typeof createRepos>): boolean {
+  return userId === config.ownerId || isEventLead(member, repos.settingsRepo);
+}
+
+function assertRewardManager(userId: string, member: GuildMember, repos: ReturnType<typeof createRepos>): void {
+  if (userId === config.ownerId) {
+    return;
+  }
+  assertLead(member, repos.settingsRepo);
+}
+
+function parseIntField(value: string, label: string): number {
+  const parsed = Number(value.trim());
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${label}は0以上の整数で入力してください。`);
+  }
+  return parsed;
+}
+
+function parseOptionalIntField(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return parseIntField(trimmed, "上限");
 }
 
 function buildAnnouncementPanelContent(
@@ -546,6 +624,116 @@ export function registerInteractionCreateListener(client: Client): void {
                 ? "スレッドが見つからないイベントです。削除するものを選んでください。"
                 : "孤児レコードは見つかりませんでした。",
               components: buildOrphanEventSelect(orphans)
+            });
+            return;
+          }
+        }
+
+        if (namespace === "reward") {
+          const member = await fetchGuildMember(interaction);
+          const service = rewardService(repos);
+
+          if (action === "audit") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const page = Math.max(0, Number(threadId) || 0);
+            const rows = listAuditLog(page, 21);
+            await interaction.reply({
+              content: buildAuditLogContent(page, rows.slice(0, 20)),
+              components: buildAuditLogComponents(page, rows.length > 20),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "settings") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const canManage = canManageRewardSettings(interaction.user.id, member, repos);
+            await interaction.reply({
+              content: buildRewardSettingsContent(service.summary()),
+              components: buildRewardSettingsComponents(canManage),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "role-rate") {
+            assertRewardManager(interaction.user.id, member, repos);
+            await interaction.reply({
+              content: "変更する役割単価を選んでください。",
+              components: buildRewardRoleSelect(service.listRoleRewards(true)),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "grade") {
+            assertRewardManager(interaction.user.id, member, repos);
+            await interaction.reply({
+              content: "変更する基本給グレードを選んでください。",
+              components: buildRewardGradeSelect(service.listGrades()),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "user-grade") {
+            assertRewardManager(interaction.user.id, member, repos);
+            await interaction.reply({
+              content: "グレードを設定するユーザーを選んでください。",
+              components: buildRewardUserGradeSelect(),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "scale-multiplier") {
+            assertRewardManager(interaction.user.id, member, repos);
+            await interaction.reply({
+              content: "倍率を変更する規模を選んでください。",
+              components: buildRewardScaleSelect(service.getScaleMultipliers()),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "contribution-new") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            contributionSessions.set(interaction.user.id, {});
+            await interaction.reply({
+              content: "記録する貢献種別を選んでください。",
+              components: buildContributionRoleSelect(service.listContributionRoleRewards()),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "contribution-event-skip") {
+            const session = contributionSessions.get(interaction.user.id);
+            if (!session?.roleLabel || !session.userId) {
+              throw new Error("貢献記録の入力が途中で切れました。最初からやり直してください。");
+            }
+            session.threadId = null;
+            await interaction.showModal(buildContributionNoteModal());
+            return;
+          }
+
+          if (action === "contribution-list") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const canDelete = canManageRewardSettings(interaction.user.id, member, repos);
+            const contributions = service.listRecentContributions(25);
+            const lines = contributions.map((item) => `#${item.id} ${item.month_key} ${item.role_label} <@${item.user_id}>`);
+            await interaction.reply({
+              content: lines.length > 0 ? ["貢献記録", ...lines].join("\n") : "貢献記録はまだありません。",
+              components: canDelete ? buildContributionDeleteSelect(contributions) : [],
+              ephemeral: true
             });
             return;
           }
@@ -1742,6 +1930,88 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
+        if (namespace === "reward") {
+          const member = await fetchGuildMember(interaction);
+          const service = rewardService(repos);
+
+          if (action === "role-rate-select") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const reward = value === "__new__"
+              ? null
+              : service.listRoleRewards(true).find((item) => item.role_label === value) ?? null;
+            await interaction.showModal(buildRewardRoleRateModal(reward?.role_label ?? "", reward?.amount ?? null));
+            return;
+          }
+
+          if (action === "grade-select") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const grade = value === "__new__"
+              ? null
+              : service.listGrades().find((item) => String(item.id) === value) ?? null;
+            await interaction.showModal(
+              buildRewardGradeModal(grade?.name ?? "", grade?.amount ?? null, grade?.monthly_cap ?? null)
+            );
+            return;
+          }
+
+          if (action === "user-grade-grade") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const session = userGradeSessions.get(interaction.user.id);
+            if (!session) {
+              throw new Error("ユーザー選択が見つかりません。最初からやり直してください。");
+            }
+            service.assignUserGrade(interaction.user.id, session.userId, Number(value));
+            userGradeSessions.delete(interaction.user.id);
+            await interaction.update({
+              content: `<@${session.userId}> のグレードを設定しました。`,
+              components: []
+            });
+            return;
+          }
+
+          if (action === "scale-select") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const multipliers = service.getScaleMultipliers();
+            await interaction.showModal(buildRewardScaleMultiplierModal(value, multipliers[value] ?? 1));
+            return;
+          }
+
+          if (action === "contribution-role") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            contributionSessions.set(interaction.user.id, { roleLabel: value });
+            await interaction.update({
+              content: "対象ユーザーを選んでください。",
+              components: buildContributionUserSelect()
+            });
+            return;
+          }
+
+          if (action === "contribution-event") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const session = contributionSessions.get(interaction.user.id);
+            if (!session?.roleLabel || !session.userId) {
+              throw new Error("貢献記録の入力が途中で切れました。最初からやり直してください。");
+            }
+            session.threadId = value;
+            await interaction.showModal(buildContributionNoteModal());
+            return;
+          }
+
+          if (action === "contribution-delete") {
+            assertRewardManager(interaction.user.id, member, repos);
+            service.deleteMiscContribution(interaction.user.id, Number(value));
+            await interaction.update({
+              content: `貢献記録 #${value} を削除しました。`,
+              components: buildContributionDeleteSelect(service.listRecentContributions(25))
+            });
+            return;
+          }
+        }
+
         if (namespace === "event" && action === "status-select") {
           if (!isEventStatus(value)) {
             throw new Error("未知の状態です。");
@@ -2057,6 +2327,45 @@ export function registerInteractionCreateListener(client: Client): void {
 
       if (interaction.isUserSelectMenu()) {
         const [namespace, action, threadId, roleType] = interaction.customId.split(":");
+        if (namespace === "reward" && action === "user-grade-user") {
+          const userId = interaction.values[0];
+          if (!userId) {
+            return;
+          }
+          const repos = createRepos(getDb());
+          const member = await fetchGuildMember(interaction);
+          assertRewardManager(interaction.user.id, member, repos);
+          userGradeSessions.set(interaction.user.id, { userId });
+          const service = rewardService(repos);
+          await interaction.update({
+            content: `<@${userId}> に設定するグレードを選んでください。`,
+            components: buildRewardGradeChoiceSelect(service.listGrades())
+          });
+          return;
+        }
+
+        if (namespace === "reward" && action === "contribution-user") {
+          const userId = interaction.values[0];
+          if (!userId) {
+            return;
+          }
+          const repos = createRepos(getDb());
+          const member = await fetchGuildMember(interaction);
+          if (interaction.user.id !== config.ownerId) {
+            assertLeadOrSub(member, repos.settingsRepo);
+          }
+          const session = contributionSessions.get(interaction.user.id);
+          if (!session?.roleLabel) {
+            throw new Error("貢献種別が見つかりません。最初からやり直してください。");
+          }
+          session.userId = userId;
+          await interaction.update({
+            content: "紐付けるイベントを選んでください。不要ならイベントなしで進めます。",
+            components: buildContributionEventSelect(repos.eventsRepo.listOpen(25))
+          });
+          return;
+        }
+
         if (namespace === "expense" && action === "proof-recipient" && threadId) {
           const recipientId = interaction.values[0] ?? null;
           await interaction.deferUpdate();
@@ -2215,7 +2524,7 @@ export function registerInteractionCreateListener(client: Client): void {
           const repos = createRepos(getDb());
           const idsByAction: Record<string, SettingKey[]> = {
             "base-submit": ["guildId"],
-            "channels1-submit": ["eventForum", "eventAnnounce", "internalAnnounce", "expenseLog"],
+            "channels1-submit": ["eventForum", "eventAnnounce", "internalAnnounce", "leadOnly", "expenseLog"],
             "channels2-submit": ["minutes", "freeChat", "meetingVc"],
             "roles-submit": ["eventLeadRole", "eventSubLeadRole", "eventerRole"]
           };
@@ -2235,6 +2544,74 @@ export function registerInteractionCreateListener(client: Client): void {
             components: buildAdminPanelComponents()
           });
           return;
+        }
+
+        if (namespace === "reward") {
+          await interaction.deferReply({ ephemeral: true });
+          const repos = createRepos(getDb());
+          const member = await fetchGuildMember(interaction);
+          const service = rewardService(repos);
+
+          if (action === "role-rate-submit") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const roleLabel = interaction.fields.getTextInputValue("role_label");
+            const amount = parseIntField(interaction.fields.getTextInputValue("amount"), "単価");
+            const enabled = !/^no|false|0|無効$/i.test(interaction.fields.getTextInputValue("enabled").trim());
+            const reward = service.upsertRoleReward(interaction.user.id, roleLabel, amount, enabled);
+            await interaction.editReply({
+              content: `役割単価を保存しました: ${reward.role_label} ${reward.amount.toLocaleString("ja-JP")} Land`
+            });
+            return;
+          }
+
+          if (action === "grade-submit") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const name = interaction.fields.getTextInputValue("name");
+            const amount = parseIntField(interaction.fields.getTextInputValue("amount"), "基本給");
+            const cap = parseOptionalIntField(interaction.fields.getTextInputValue("monthly_cap"));
+            const grade = service.upsertGrade(interaction.user.id, name, amount, cap);
+            await interaction.editReply({
+              content: `基本給グレードを保存しました: ${grade.name}`
+            });
+            return;
+          }
+
+          if (action === "scale-submit") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const scale = parts[3];
+            if (!scale) {
+              throw new Error("規模が指定されていません。");
+            }
+            const multiplier = Number(interaction.fields.getTextInputValue("multiplier").trim());
+            service.setScaleMultiplier(interaction.user.id, scale, multiplier);
+            await interaction.editReply({
+              content: `規模倍率を保存しました: ${scale} = ${multiplier}`
+            });
+            return;
+          }
+
+          if (action === "contribution-submit") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const session = contributionSessions.get(interaction.user.id);
+            if (!session?.roleLabel || !session.userId) {
+              throw new Error("貢献記録の入力が途中で切れました。最初からやり直してください。");
+            }
+            const note = interaction.fields.getTextInputValue("note").trim() || null;
+            const contribution = service.createMiscContribution({
+              actorId: interaction.user.id,
+              userId: session.userId,
+              roleLabel: session.roleLabel,
+              threadId: session.threadId ?? null,
+              note
+            });
+            contributionSessions.delete(interaction.user.id);
+            await interaction.editReply({
+              content: `貢献記録 #${contribution.id} を保存しました。`
+            });
+            return;
+          }
         }
 
         if (namespace === "role" && action === "add-submit") {

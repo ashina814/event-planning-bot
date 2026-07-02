@@ -33,6 +33,11 @@ import {
   statusLabels
 } from "./labels.js";
 import { shiftMonthKey } from "../features/overview/calendar.js";
+import type {
+  BaseSalaryGradeRecord,
+  MiscContributionRecord,
+  RoleRewardRecord
+} from "../features/rewards/service.js";
 import { mainRoleKey, roleKeyFor, roleLabel } from "../db/repos/roles.js";
 import { formatJstDateTime } from "../lib/time.js";
 
@@ -1290,6 +1295,225 @@ export function buildAuditLogComponents(page: number, hasNext: boolean): ActionR
         .setLabel("さらに表示")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(!hasNext)
+    )
+  ];
+}
+
+export function buildLeadDashboardComponents(): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("reward:contribution-new:panel")
+        .setEmoji("➕")
+        .setLabel("貢献を記録")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("reward:audit:0")
+        .setEmoji("📜")
+        .setLabel("操作ログ")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("reward:settings:panel")
+        .setEmoji("💰")
+        .setLabel("支給設定")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("reward:contribution-list:panel")
+        .setLabel("貢献一覧")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildRewardSettingsComponents(canManage: boolean): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("reward:role-rate:panel")
+        .setLabel("役割単価")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!canManage),
+      new ButtonBuilder()
+        .setCustomId("reward:grade:panel")
+        .setLabel("基本給グレード")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!canManage),
+      new ButtonBuilder()
+        .setCustomId("reward:user-grade:panel")
+        .setLabel("ユーザーグレード")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(!canManage),
+      new ButtonBuilder()
+        .setCustomId("reward:scale-multiplier:panel")
+        .setLabel("規模倍率")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(!canManage)
+    )
+  ];
+}
+
+export function buildRewardRoleSelect(rewards: RoleRewardRecord[]): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("reward:role-rate-select:panel")
+        .setPlaceholder("変更する役割単価")
+        .addOptions(
+          rewards.slice(0, 24).map((reward) => ({
+            label: reward.role_label.slice(0, 100),
+            value: reward.role_label,
+            description: `${reward.amount.toLocaleString("ja-JP")} Land`
+          })).concat({
+            label: "新しい役割単価を追加",
+            value: "__new__",
+            description: "新規作成"
+          })
+        )
+    )
+  ];
+}
+
+export function buildRewardGradeSelect(grades: BaseSalaryGradeRecord[]): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("reward:grade-select:panel")
+        .setPlaceholder("変更する基本給グレード")
+        .addOptions(
+          grades.slice(0, 24).map((grade) => ({
+            label: grade.name.slice(0, 100),
+            value: String(grade.id),
+            description: `${grade.amount.toLocaleString("ja-JP")} Land / 上限 ${grade.monthly_cap?.toLocaleString("ja-JP") ?? "なし"}`
+          })).concat({
+            label: "新しいグレードを追加",
+            value: "__new__",
+            description: "新規作成"
+          })
+        )
+    )
+  ];
+}
+
+export function buildRewardUserGradeSelect(): ActionRowBuilder<UserSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+      new UserSelectMenuBuilder()
+        .setCustomId("reward:user-grade-user:panel")
+        .setPlaceholder("グレードを設定するユーザー")
+        .setMinValues(1)
+        .setMaxValues(1)
+    )
+  ];
+}
+
+export function buildRewardGradeChoiceSelect(grades: BaseSalaryGradeRecord[]): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("reward:user-grade-grade:panel")
+        .setPlaceholder("設定するグレード")
+        .addOptions(
+          grades.slice(0, 25).map((grade) => ({
+            label: grade.name.slice(0, 100),
+            value: String(grade.id),
+            description: `${grade.amount.toLocaleString("ja-JP")} Land`
+          }))
+        )
+    )
+  ];
+}
+
+export function buildRewardScaleSelect(multipliers: Record<string, number>): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("reward:scale-select:panel")
+        .setPlaceholder("倍率を変更する規模")
+        .addOptions(
+          eventScales.map((scale) => ({
+            label: scaleLabels[scale] ?? scale,
+            value: scale,
+            description: `現在 ${multipliers[scale] ?? 1}`
+          }))
+        )
+    )
+  ];
+}
+
+export function buildContributionRoleSelect(rewards: RoleRewardRecord[]): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("reward:contribution-role:panel")
+        .setPlaceholder("貢献種別")
+        .addOptions(
+          rewards.slice(0, 25).map((reward) => ({
+            label: reward.role_label.slice(0, 100),
+            value: reward.role_label,
+            description: `${reward.amount.toLocaleString("ja-JP")} Land`
+          }))
+        )
+    )
+  ];
+}
+
+export function buildContributionUserSelect(): ActionRowBuilder<UserSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+      new UserSelectMenuBuilder()
+        .setCustomId("reward:contribution-user:panel")
+        .setPlaceholder("対象ユーザー")
+        .setMinValues(1)
+        .setMaxValues(1)
+    )
+  ];
+}
+
+export function buildContributionEventSelect(events: EventRecord[]): Array<ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>> {
+  const rows: Array<ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>> = [];
+  if (events.length > 0) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId("reward:contribution-event:panel")
+          .setPlaceholder("紐付けるイベント")
+          .addOptions(
+            events.slice(0, 25).map((event) => ({
+              label: event.title.slice(0, 100),
+              value: event.thread_id,
+              description: event.scheduled_at ? formatJstDateTime(event.scheduled_at) : "開催日時未定"
+            }))
+          )
+      )
+    );
+  }
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("reward:contribution-event-skip:panel")
+        .setLabel("イベントなしで進む")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
+  return rows;
+}
+
+export function buildContributionDeleteSelect(contributions: MiscContributionRecord[]): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  if (contributions.length === 0) {
+    return [];
+  }
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("reward:contribution-delete:panel")
+        .setPlaceholder("削除する貢献記録")
+        .addOptions(
+          contributions.slice(0, 25).map((item) => ({
+            label: `#${item.id} ${item.role_label}`.slice(0, 100),
+            value: String(item.id),
+            description: `<@${item.user_id}> / ${item.month_key}`.slice(0, 100)
+          }))
+        )
     )
   ];
 }

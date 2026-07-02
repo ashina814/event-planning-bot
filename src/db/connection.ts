@@ -117,6 +117,18 @@ function runMigrations(db: Database.Database): void {
       continue;
     }
 
+    if (
+      name === "008_d2_rewards.sql" &&
+      hasTable(db, "role_rewards") &&
+      hasTable(db, "base_salary_grades") &&
+      hasTable(db, "user_grades") &&
+      hasTable(db, "reward_settings") &&
+      hasTable(db, "misc_contributions")
+    ) {
+      markMigrationApplied(db, name);
+      continue;
+    }
+
     const sql = readFileSync(resolve(migrationsDir, name), "utf8");
     const tx = db.transaction(() => {
       db.exec(sql);

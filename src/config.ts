@@ -7,7 +7,8 @@ const envSchema = z.object({
   OWNER_ID: z.string().min(1),
   DB_PATH: z.string().default("./data/bot.db"),
   TZ: z.literal("Asia/Tokyo").default("Asia/Tokyo"),
-  LOG_LEVEL: z.string().default("info")
+  LOG_LEVEL: z.string().default("info"),
+  CH_LEAD_ONLY: z.string().default("")
 });
 
 const env = envSchema.parse(process.env);
@@ -18,7 +19,8 @@ export const config = {
   ownerId: env.OWNER_ID,
   dbPath: env.DB_PATH,
   timeZone: env.TZ,
-  logLevel: env.LOG_LEVEL
+  logLevel: env.LOG_LEVEL,
+  leadOnlyChannel: env.CH_LEAD_ONLY
 } as const;
 
 export type AppConfig = typeof config;

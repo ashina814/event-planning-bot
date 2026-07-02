@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import { createClient } from "./client.js";
 import { closeDb, getDb } from "./db/connection.js";
 import { createRepos } from "./db/repos/index.js";
+import { RewardsService } from "./features/rewards/service.js";
 import { logger } from "./lib/logger.js";
 import { registerExpenseListeners } from "./listeners/expenses.js";
 import { registerInteractionCreateListener } from "./listeners/interactionCreate.js";
@@ -36,6 +37,8 @@ registerExpenseListeners(client);
 
 client.once(Events.ClientReady, () => {
   scheduler.ensureStaleEventCheckScheduled();
+  const rewards = new RewardsService(db, repos.settingsRepo, repos.eventsRepo);
+  void rewards.ensureLeadDashboard(client);
   void reportOrphanEventThreads();
 });
 
