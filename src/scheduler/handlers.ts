@@ -45,9 +45,29 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.rolesRepo,
         deps.seriesRepo,
         deps.jobsRepo,
+        deps.timersRepo,
         deps.settingsRepo
       );
       await service.autoProgress(threadId, scheduledAt);
+      return;
+    }
+    case "event_reminder_announce": {
+      const threadId = String(payload.threadId ?? "");
+      const scheduledAt = payload.scheduledAt ? Number(payload.scheduledAt) : null;
+      const label = String(payload.label ?? "まもなく");
+      if (!threadId) {
+        throw new Error("イベントが指定されていません。");
+      }
+      const service = new EventLifecycleService(
+        deps.client,
+        deps.eventsRepo,
+        deps.rolesRepo,
+        deps.seriesRepo,
+        deps.jobsRepo,
+        deps.timersRepo,
+        deps.settingsRepo
+      );
+      await service.handleAnnounceReminder(threadId, scheduledAt, label);
       return;
     }
     case "announcement_post": {
@@ -137,6 +157,7 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.rolesRepo,
         deps.seriesRepo,
         deps.jobsRepo,
+        deps.timersRepo,
         deps.settingsRepo
       );
       await service.handleRetrospectiveReminder(threadId, scheduledAt);

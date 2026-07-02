@@ -41,6 +41,7 @@ export const eventCommand: CommandModule = {
       repos.rolesRepo,
       repos.seriesRepo,
       repos.jobsRepo,
+      repos.timersRepo,
       repos.settingsRepo
     );
 

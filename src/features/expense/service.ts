@@ -92,6 +92,7 @@ export class ExpenseService {
     this.jobsRepo.create({
       kind: "expense_proof_timeout",
       payload: { expenseId: id },
+      threadId,
       fireAt: now + 5 * 60,
       now
     });

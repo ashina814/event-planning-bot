@@ -67,6 +67,7 @@ export class TodoService {
       this.jobsRepo.create({
         kind: "todo_due_reminder",
         payload: { todoId: id },
+        threadId,
         fireAt: dueAt,
         now
       });
@@ -126,6 +127,7 @@ export class TodoService {
       this.jobsRepo.create({
         kind: "todo_due_reminder",
         payload: { todoId },
+        threadId,
         fireAt: dueAt,
         now: unixNow()
       });

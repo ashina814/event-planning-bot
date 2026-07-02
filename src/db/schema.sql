@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS scheduled_jobs (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   kind            TEXT NOT NULL,
   payload         TEXT NOT NULL,
+  thread_id       TEXT,
   fire_at         INTEGER NOT NULL,
   status          TEXT NOT NULL DEFAULT 'pending',
   fired_at        INTEGER,
@@ -207,3 +208,4 @@ CREATE TABLE IF NOT EXISTS scheduled_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_pending ON scheduled_jobs(status, fire_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_thread ON scheduled_jobs(thread_id);

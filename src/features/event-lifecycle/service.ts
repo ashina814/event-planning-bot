@@ -10,6 +10,7 @@ import type { JobsRepo } from "../../db/repos/jobs.js";
 import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SeriesRepo } from "../../db/repos/series.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
+import type { TimersRepo } from "../../db/repos/timers.js";
 import { assertCanCreateEvent, assertCanManageEvent, fetchGuildMember } from "../../lib/permission.js";
 import { titleWithStatusPrefix } from "../../lib/parser.js";
 import { formatJstDateTime, jstDateTimeToUnix, unixNow } from "../../lib/time.js";
@@ -23,6 +24,12 @@ function truncateDiscordName(name: string): string {
   return name.length <= 100 ? name : name.slice(0, 97) + "...";
 }
 
+const eventRescheduleJobKinds = [
+  "event_reminder_announce",
+  "event_reminder_retrospective",
+  "event_auto_progress"
+] as const;
+
 export class EventLifecycleService {
   constructor(
     private readonly client: Client,
@@ -30,6 +37,7 @@ export class EventLifecycleService {
     private readonly rolesRepo: RolesRepo,
     private readonly seriesRepo: SeriesRepo,
     private readonly jobsRepo: JobsRepo,
+    private readonly timersRepo: TimersRepo,
     private readonly settingsRepo: SettingsRepo
   ) {}
 
@@ -109,6 +117,7 @@ export class EventLifecycleService {
     const now = unixNow();
     this.eventsRepo.updateStatus(threadId, nextStatus, now);
     if (nextStatus === "announced" || nextStatus === "in_progress") {
+      this.jobsRepo.cancelJobsByThread(threadId, [...eventRescheduleJobKinds]);
       this.scheduleEventJobs(this.requireEvent(threadId), now);
     }
     await this.renameThread(threadId, nextStatus, event.title);
@@ -123,10 +132,16 @@ export class EventLifecycleService {
     assertCanManageEvent(member, event, roles, this.settingsRepo);
 
     const scheduledAt = jstDateTimeToUnix(input.trim());
+    return this.changeScheduledAt(threadId, scheduledAt);
+  }
+
+  async changeScheduledAt(threadId: string, scheduledAt: number): Promise<EventRecord> {
     const now = unixNow();
     this.eventsRepo.updateScheduledAt(threadId, scheduledAt, now);
+    this.jobsRepo.cancelJobsByThread(threadId, [...eventRescheduleJobKinds]);
     const updated = this.requireEvent(threadId);
     this.scheduleEventJobs(updated, now);
+    await this.warnIfIdleTimerExists(threadId);
     await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
     return updated;
   }
@@ -182,6 +197,46 @@ export class EventLifecycleService {
     });
   }
 
+  async handleAnnounceReminder(
+    threadId: string,
+    expectedScheduledAt: number | null = null,
+    label = "まもなく"
+  ): Promise<void> {
+    const event = this.eventsRepo.get(threadId);
+    if (
+      !event ||
+      event.status === "announced" ||
+      event.status === "in_progress" ||
+      event.status === "done" ||
+      event.status === "cancelled"
+    ) {
+      return;
+    }
+    if (expectedScheduledAt && event.scheduled_at !== expectedScheduledAt) {
+      return;
+    }
+
+    const channel = await this.client.channels.fetch(threadId);
+    if (!channel || !("send" in channel)) {
+      throw new Error("告知リマインド先スレッドが見つかりません。");
+    }
+
+    const main = this.rolesRepo.getFirst(threadId, "main");
+    const eventLeadRole = this.settingsRepo.get("eventLeadRole");
+    const mention = main
+      ? `<@${main.user_id}>`
+      : eventLeadRole
+        ? `<@&${eventLeadRole}>`
+        : "イベント統括";
+    await channel.send({
+      content: [
+        `📢 告知確認リマインド ${mention}`,
+        `開催${label}: ${event.scheduled_at ? formatJstDateTime(event.scheduled_at) : "未定"}`,
+        "必要なら告知文予約や状態変更を確認してください。"
+      ].join("\n")
+    });
+  }
+
   private requireEvent(threadId: string): EventRecord {
     const event = this.eventsRepo.get(threadId);
     if (!event) {
@@ -212,16 +267,42 @@ export class EventLifecycleService {
       return;
     }
 
+    if ((event.status === "planning" || event.status === "announcing") && event.scheduled_at > now) {
+      const reminderSpecs = [
+        { secondsBefore: 3 * 24 * 60 * 60, label: "3日前" },
+        { secondsBefore: 24 * 60 * 60, label: "前日" }
+      ];
+
+      for (const spec of reminderSpecs) {
+        const fireAt = event.scheduled_at - spec.secondsBefore;
+        if (fireAt <= now) {
+          continue;
+        }
+        this.jobsRepo.create({
+          kind: "event_reminder_announce",
+          payload: {
+            threadId: event.thread_id,
+            scheduledAt: event.scheduled_at,
+            label: spec.label
+          },
+          threadId: event.thread_id,
+          fireAt,
+          now
+        });
+      }
+    }
+
     if (event.status === "announced" && event.scheduled_at > now) {
       this.jobsRepo.create({
         kind: "event_auto_progress",
         payload: { threadId: event.thread_id, scheduledAt: event.scheduled_at },
+        threadId: event.thread_id,
         fireAt: event.scheduled_at,
         now
       });
     }
 
-    if (event.scheduled_at + 24 * 60 * 60 > now) {
+    if (event.status !== "done" && event.status !== "cancelled" && event.scheduled_at + 24 * 60 * 60 > now) {
       this.jobsRepo.create({
         kind: "event_reminder_retrospective",
         payload: {
@@ -229,9 +310,26 @@ export class EventLifecycleService {
           scheduledAt: event.scheduled_at,
           scheduledText: formatJstDateTime(event.scheduled_at)
         },
+        threadId: event.thread_id,
         fireAt: event.scheduled_at + 24 * 60 * 60,
         now
       });
     }
+  }
+
+  private async warnIfIdleTimerExists(threadId: string): Promise<void> {
+    const timer = this.timersRepo.latestSchedule(threadId);
+    if (!timer || timer.state !== "idle") {
+      return;
+    }
+
+    const channel = await this.client.channels.fetch(threadId).catch(() => null);
+    if (!channel || !("send" in channel)) {
+      return;
+    }
+
+    await channel.send({
+      content: "⚠️ 開催日時が変更されました。タイムキーパーのタイムテーブルを確認・再設定してください。"
+    });
   }
 }

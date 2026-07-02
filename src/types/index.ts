@@ -236,8 +236,9 @@ export interface ScheduledJobRecord {
   id: number;
   kind: string;
   payload: string;
+  thread_id: string | null;
   fire_at: number;
-  status: "pending" | "processing" | "fired" | "skipped" | "failed";
+  status: "pending" | "processing" | "fired" | "skipped" | "failed" | "cancelled";
   fired_at: number | null;
   error: string | null;
   created_at: number;

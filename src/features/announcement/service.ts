@@ -72,6 +72,7 @@ export class AnnouncementService {
         announcement_id: id,
         scheduledAt: input.scheduledAt
       },
+      threadId: input.threadId,
       fireAt: input.scheduledAt,
       now
     });

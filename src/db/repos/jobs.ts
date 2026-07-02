@@ -4,6 +4,7 @@ import type { ScheduledJobRecord } from "../../types/index.js";
 interface CreateJobInput {
   kind: string;
   payload: unknown;
+  threadId?: string | null;
   fireAt: number;
   now: number;
 }
@@ -14,10 +15,10 @@ export class JobsRepo {
   create(input: CreateJobInput): number {
     const result = this.db
       .prepare(
-        `INSERT INTO scheduled_jobs (kind, payload, fire_at, status, created_at)
-         VALUES (?, ?, ?, 'pending', ?)`
+        `INSERT INTO scheduled_jobs (kind, payload, thread_id, fire_at, status, created_at)
+         VALUES (?, ?, ?, ?, 'pending', ?)`
       )
-      .run(input.kind, JSON.stringify(input.payload), input.fireAt, input.now);
+      .run(input.kind, JSON.stringify(input.payload), input.threadId ?? null, input.fireAt, input.now);
 
     return Number(result.lastInsertRowid);
   }
@@ -69,5 +70,31 @@ export class JobsRepo {
     this.db
       .prepare("UPDATE scheduled_jobs SET status = 'skipped', error = ? WHERE id = ?")
       .run(reason, id);
+  }
+
+  cancelJobsByThread(threadId: string, kinds?: string[]): number {
+    if (kinds && kinds.length > 0) {
+      const placeholders = kinds.map(() => "?").join(", ");
+      const result = this.db
+        .prepare(
+          `UPDATE scheduled_jobs
+           SET status = 'cancelled', error = 'cancelled by event reschedule'
+           WHERE thread_id = ?
+             AND status = 'pending'
+             AND kind IN (${placeholders})`
+        )
+        .run(threadId, ...kinds);
+      return result.changes;
+    }
+
+    const result = this.db
+      .prepare(
+        `UPDATE scheduled_jobs
+         SET status = 'cancelled', error = 'cancelled by event reschedule'
+         WHERE thread_id = ?
+           AND status = 'pending'`
+      )
+      .run(threadId);
+    return result.changes;
   }
 }

@@ -824,6 +824,7 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.rolesRepo,
             repos.seriesRepo,
             repos.jobsRepo,
+            repos.timersRepo,
             repos.settingsRepo
           );
           await service.changeStatus(member, threadId, value);
@@ -1208,6 +1209,7 @@ export function registerInteractionCreateListener(client: Client): void {
             repos.rolesRepo,
             repos.seriesRepo,
             repos.jobsRepo,
+            repos.timersRepo,
             repos.settingsRepo
           );
           const event = await service.setSchedule(member, threadId, scheduledAt);

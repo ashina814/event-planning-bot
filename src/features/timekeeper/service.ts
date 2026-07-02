@@ -109,6 +109,7 @@ export class TimekeeperService {
             threadId,
             minutes: preNoticeMin
           },
+          threadId,
           fireAt: section.planned_start - preNoticeMin * 60,
           now
         });
@@ -121,6 +122,7 @@ export class TimekeeperService {
           sectionId: section.id,
           threadId
         },
+        threadId,
         fireAt: section.planned_start,
         now
       });

@@ -80,6 +80,11 @@ function runMigrations(db: Database.Database): void {
       continue;
     }
 
+    if (name === "003_jobs_thread.sql" && hasColumn(db, "scheduled_jobs", "thread_id")) {
+      markMigrationApplied(db, name);
+      continue;
+    }
+
     const sql = readFileSync(resolve(migrationsDir, name), "utf8");
     const tx = db.transaction(() => {
       db.exec(sql);
