@@ -20,7 +20,7 @@ import {
 import { config } from "../config.js";
 import { getDb } from "../db/connection.js";
 import { createRepos } from "../db/repos/index.js";
-import { customRoleKey, normalizeRoleLabel, parseRoleKey } from "../db/repos/roles.js";
+import { customRoleKey, normalizeRoleLabel, parseRoleKey, roleKeyFor } from "../db/repos/roles.js";
 import { AnnouncementService } from "../features/announcement/service.js";
 import { EventLifecycleService } from "../features/event-lifecycle/service.js";
 import { ExpenseService } from "../features/expense/service.js";
@@ -48,6 +48,7 @@ import {
   type EventStatus,
   type ExpenseCategory,
   type ExpenseDirection,
+  type RoleSlot,
   type RoleType,
   type SettingKey
 } from "../types/index.js";
@@ -66,6 +67,7 @@ import {
   buildParticipantsPostChannelSelect,
   buildParticipantsSetupGuideComponents,
   buildRoleAssignUserSelect,
+  buildRoleBulkComponents,
   buildRoleDeleteConfirm,
   buildRoleHandoverSelect,
   buildRolePanelComponents,
@@ -125,6 +127,62 @@ function isExpenseDirection(value: string): value is ExpenseDirection {
 
 function isHelpTopic(value: string): value is HelpTopic {
   return helpTopics.some((topic) => topic.value === value);
+}
+
+interface RoleBulkSession {
+  userId: string;
+  threadId: string;
+  roles: RoleSlot[];
+  selections: Record<string, string | null>;
+  page: number;
+  createdAt: number;
+}
+
+const roleBulkSessions = new Map<string, RoleBulkSession>();
+const ROLE_BULK_SESSION_TTL_MS = 10 * 60 * 1000;
+
+function roleBulkSessionKey(userId: string, threadId: string): string {
+  return `${userId}:${threadId}`;
+}
+
+function cleanupRoleBulkSessions(): void {
+  const expiresBefore = Date.now() - ROLE_BULK_SESSION_TTL_MS;
+  for (const [key, session] of roleBulkSessions.entries()) {
+    if (session.createdAt < expiresBefore) {
+      roleBulkSessions.delete(key);
+    }
+  }
+}
+
+function createRoleBulkSession(userId: string, threadId: string, roles: RoleSlot[]): RoleBulkSession {
+  cleanupRoleBulkSessions();
+  const selections = Object.fromEntries(
+    roles.map((role) => [roleKeyFor(role), role.user_id ?? null])
+  ) as Record<string, string | null>;
+  const session = {
+    userId,
+    threadId,
+    roles,
+    selections,
+    page: 0,
+    createdAt: Date.now()
+  };
+  roleBulkSessions.set(roleBulkSessionKey(userId, threadId), session);
+  return session;
+}
+
+function requireRoleBulkSession(userId: string, threadId: string): RoleBulkSession {
+  cleanupRoleBulkSessions();
+  const session = roleBulkSessions.get(roleBulkSessionKey(userId, threadId));
+  if (!session) {
+    throw new Error("一括設定画面の有効期限が切れました。もう一度 [まとめて設定] から開いてください。");
+  }
+  return session;
+}
+
+function roleBulkContent(session: RoleBulkSession): string {
+  const maxPage = Math.max(0, Math.ceil(session.roles.length / 4) - 1);
+  return `担当をまとめて設定します。${maxPage > 0 ? `ページ ${session.page + 1}/${maxPage + 1}` : ""}`;
 }
 
 function assertOwner(userId: string): void {
@@ -208,6 +266,37 @@ async function replyError(interaction: Interaction, error: unknown): Promise<voi
 export function registerInteractionCreateListener(client: Client): void {
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
+      if (interaction.isAutocomplete()) {
+        if (interaction.commandName !== "event") {
+          return;
+        }
+
+        const focused = interaction.options.getFocused(true);
+        if (focused.name !== "series") {
+          await interaction.respond([]);
+          return;
+        }
+
+        const repos = createRepos(getDb());
+        const query = String(focused.value ?? "").trim().toLowerCase();
+        const allSeries = repos.seriesRepo.listActive(100);
+        const startsWith = allSeries.filter((series) => series.name.toLowerCase().startsWith(query));
+        const includes = allSeries.filter(
+          (series) => !startsWith.includes(series) && series.name.toLowerCase().includes(query)
+        );
+        const choices = [...startsWith, ...includes].slice(0, 25).map((series) => ({
+          name: series.name,
+          value: series.name
+        }));
+
+        await interaction.respond(
+          choices.length > 0
+            ? choices
+            : [{ name: "(単発イベントとして作成)", value: " " }]
+        );
+        return;
+      }
+
       if (interaction.isChatInputCommand()) {
         const command = commandMap.get(interaction.commandName);
         if (!command) {
@@ -309,6 +398,58 @@ export function registerInteractionCreateListener(client: Client): void {
               content: "主担当にするユーザーを選んでください。",
               embeds: [],
               components: buildRoleAssignUserSelect(threadId, "main", "主担当")
+            });
+            return;
+          }
+
+          if (action === "bulk") {
+            const roles = repos.rolesRepo.listSlots(threadId, event.series_id);
+            const session = createRoleBulkSession(interaction.user.id, threadId, roles);
+            await interaction.update({
+              content: roleBulkContent(session),
+              embeds: [],
+              components: buildRoleBulkComponents(threadId, session.roles, session.selections, session.page)
+            });
+            return;
+          }
+
+          if (action === "bulk-page") {
+            const direction = parts[3];
+            const session = requireRoleBulkSession(interaction.user.id, threadId);
+            session.page += direction === "prev" ? -1 : 1;
+            session.page = Math.min(Math.max(session.page, 0), Math.max(0, Math.ceil(session.roles.length / 4) - 1));
+            await interaction.update({
+              content: roleBulkContent(session),
+              embeds: [],
+              components: buildRoleBulkComponents(threadId, session.roles, session.selections, session.page)
+            });
+            return;
+          }
+
+          if (action === "bulk-confirm") {
+            const session = requireRoleBulkSession(interaction.user.id, threadId);
+            await interaction.deferUpdate();
+            const member = await fetchGuildMember(interaction);
+            const service = new EventRolesService(
+              interaction.client,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.seriesRepo,
+              repos.settingsRepo
+            );
+            const assignments = session.roles
+              .map((role) => ({
+                roleKey: roleKeyFor(role),
+                userId: session.selections[roleKeyFor(role)] ?? null
+              }))
+              .filter((assignment): assignment is { roleKey: string; userId: string } => Boolean(assignment.userId));
+            const summary = await service.bulkAssignRoles(member, threadId, assignments);
+            roleBulkSessions.delete(roleBulkSessionKey(interaction.user.id, threadId));
+            const updatedRoles = repos.rolesRepo.listSlots(threadId, event.series_id);
+            await interaction.editReply({
+              content: `担当を更新しました: ${summary}`,
+              embeds: [buildFlexibleRolePanelEmbed(event, updatedRoles)],
+              components: buildRolePanelComponents(threadId, updatedRoles)
             });
             return;
           }
@@ -1015,6 +1156,17 @@ export function registerInteractionCreateListener(client: Client): void {
 
       if (interaction.isUserSelectMenu()) {
         const [namespace, action, threadId, roleType] = interaction.customId.split(":");
+        if (namespace === "role" && action === "bulk-select" && threadId && roleType) {
+          const userId = interaction.values[0];
+          if (!userId) {
+            return;
+          }
+          const session = requireRoleBulkSession(interaction.user.id, threadId);
+          session.selections[roleType] = userId;
+          await interaction.deferUpdate();
+          return;
+        }
+
         if (namespace === "role" && action === "assign" && threadId && roleType) {
           const userId = interaction.values[0];
           if (!userId) {

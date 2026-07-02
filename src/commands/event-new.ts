@@ -2,6 +2,7 @@ import { SlashCommandBuilder } from "discord.js";
 import { getDb } from "../db/connection.js";
 import { createRepos } from "../db/repos/index.js";
 import { EventLifecycleService } from "../features/event-lifecycle/service.js";
+import { formatJstDateTime, parseFlexibleDateTime } from "../lib/time.js";
 import type { CommandModule } from "../types/index.js";
 
 export const eventCommand: CommandModule = {
@@ -25,6 +26,14 @@ export const eventCommand: CommandModule = {
             .setDescription("シリーズ名。単発の場合は空で OK")
             .setRequired(false)
             .setMaxLength(80)
+            .setAutocomplete(true)
+        )
+        .addStringOption((option) =>
+          option
+            .setName("datetime")
+            .setDescription("開催日時 (例: 明日 22:00 / 6/29 22:00)。未定なら空欄")
+            .setDescriptionLocalizations({ ja: "開催日時 (例: 明日 22:00)。未定なら空欄" })
+            .setRequired(false)
         )
     ),
   async execute(interaction) {
@@ -46,9 +55,23 @@ export const eventCommand: CommandModule = {
     );
 
     const event = await service.createFromCommand(interaction);
+    const datetimeInput = interaction.options.getString("datetime")?.trim();
+    let scheduledLine = "";
+    let warningLine = "";
+
+    if (datetimeInput) {
+      try {
+        const scheduledAt = parseFlexibleDateTime(datetimeInput);
+        const updated = await service.changeScheduledAt(event.thread_id, scheduledAt);
+        scheduledLine = `\n開催日時: ${updated.scheduled_at ? formatJstDateTime(updated.scheduled_at) : "未定"}`;
+      } catch {
+        warningLine = "\n⚠️ イベントは作成しましたが日時が読めませんでした。コントロールパネルの [日時] から設定してください。";
+      }
+    }
+
     const eventUrl = `https://discord.com/channels/${interaction.guildId}/${event.thread_id}`;
     await interaction.editReply({
-      content: `作成しました: ${eventUrl}`
+      content: `作成しました: ${eventUrl}${scheduledLine}${warningLine}`
     });
   }
 };

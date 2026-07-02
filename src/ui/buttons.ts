@@ -248,6 +248,10 @@ export function buildRolePanelComponents(
         .setLabel("役割を追加")
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
+        .setCustomId(`role:bulk:${threadId}`)
+        .setLabel("まとめて設定")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
         .setCustomId(`role:handover:${threadId}`)
         .setLabel("引き継ぎ")
         .setStyle(ButtonStyle.Secondary)
@@ -255,6 +259,55 @@ export function buildRolePanelComponents(
   );
 
   return rows.slice(0, 5);
+}
+
+export function buildRoleBulkComponents(
+  threadId: string,
+  roles: RoleSlot[],
+  selections: Record<string, string | null>,
+  page: number
+): Array<ActionRowBuilder<UserSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>> {
+  const pageSize = 4;
+  const maxPage = Math.max(0, Math.ceil(roles.length / pageSize) - 1);
+  const currentPage = Math.min(Math.max(page, 0), maxPage);
+  const visibleRoles = roles.slice(currentPage * pageSize, currentPage * pageSize + pageSize);
+  const rows: Array<ActionRowBuilder<UserSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>> =
+    visibleRoles.map((role) => {
+      const roleKey = roleKeyFor(role);
+      const selected = selections[roleKey] ?? role.user_id ?? null;
+      const menu = new UserSelectMenuBuilder()
+        .setCustomId(`role:bulk-select:${threadId}:${roleKey}`)
+        .setPlaceholder(`${roleLabel(role)}を選択`.slice(0, 100))
+        .setMinValues(1)
+        .setMaxValues(1);
+
+      if (selected) {
+        menu.setDefaultUsers(selected);
+      }
+
+      return new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(menu);
+    });
+
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`role:bulk-page:${threadId}:prev`)
+        .setLabel("前へ")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage <= 0),
+      new ButtonBuilder()
+        .setCustomId(`role:bulk-confirm:${threadId}`)
+        .setLabel("確定")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`role:bulk-page:${threadId}:next`)
+        .setLabel("次へ")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage >= maxPage)
+    )
+  );
+
+  return rows;
 }
 
 export function buildRoleAssignUserSelect(

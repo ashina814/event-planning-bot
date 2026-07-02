@@ -41,6 +41,40 @@ export class EventRolesService {
     await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
   }
 
+  async bulkAssignRoles(
+    member: GuildMember,
+    threadId: string,
+    assignments: Array<{ roleKey: string; userId: string }>
+  ): Promise<string> {
+    const event = this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    const cleaned = assignments.filter((assignment) => assignment.userId);
+    if (cleaned.length === 0) {
+      throw new Error("設定する担当を1つ以上選んでください。");
+    }
+
+    for (const assignment of cleaned) {
+      const identity = parseRoleKey(assignment.roleKey);
+      assertCanAssignRole(member, event, roles, identity.roleType, this.settingsRepo);
+    }
+
+    const now = unixNow();
+    for (const assignment of cleaned) {
+      this.rolesRepo.replaceSingle(threadId, assignment.roleKey, assignment.userId, now);
+    }
+
+    const summary = cleaned
+      .map((assignment) => {
+        const identity = parseRoleKey(assignment.roleKey);
+        return `${identity.roleLabel ?? "主担当"} <@${assignment.userId}>`;
+      })
+      .join(" / ");
+
+    await this.postToThread(threadId, `担当を更新しました: ${summary}`);
+    await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
+    return summary;
+  }
+
   async deleteRole(member: GuildMember, threadId: string, roleKey: string): Promise<void> {
     const event = this.requireEvent(threadId);
     const roles = this.rolesRepo.list(threadId);
