@@ -4,7 +4,7 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from "discord.js";
-import type { BotSettings, ExpenseCategory, ExpenseDirection, TodoRecord } from "../types/index.js";
+import type { BotSettings, ExpenseCategory, ExpenseDirection, ExpenseRecord, TodoRecord } from "../types/index.js";
 
 export function buildHandoverModal(threadId: string, roleType: string): ModalBuilder {
   return new ModalBuilder()
@@ -301,6 +301,50 @@ export function buildExpenseCreateModal(
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(false)
           .setMaxLength(1000)
+      )
+    );
+}
+
+export function buildExpenseCorrectModal(threadId: string, expense: ExpenseRecord): ModalBuilder {
+  const recipientInput = new TextInputBuilder()
+    .setCustomId("recipient")
+    .setLabel("訂正後の対象者")
+    .setPlaceholder("任意。@ユーザー または ユーザーID")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+  if (expense.recipient_id) {
+    recipientInput.setValue(expense.recipient_id);
+  }
+
+  const memoInput = new TextInputBuilder()
+    .setCustomId("memo")
+    .setLabel("訂正後のメモ")
+    .setPlaceholder("任意")
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setMaxLength(1000);
+  if (expense.memo) {
+    memoInput.setValue(expense.memo.slice(0, 1000));
+  }
+
+  return new ModalBuilder()
+    .setCustomId(`expense:correct-submit:${threadId}:${expense.id}`)
+    .setTitle(`出費 #${expense.id} 訂正`)
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("amount")
+          .setLabel("訂正後の金額 Land")
+          .setPlaceholder("例: 18000")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setValue(String(expense.amount))
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        recipientInput
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        memoInput
       )
     );
 }

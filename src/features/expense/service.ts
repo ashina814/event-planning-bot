@@ -30,6 +30,12 @@ interface CreateExpenseInput {
   occurredMemo: string;
 }
 
+interface CorrectExpenseInput {
+  amount: string;
+  recipient: string;
+  memo: string;
+}
+
 export interface ExpensePanel {
   expenses: ExpenseRecord[];
   totalOut: number;
@@ -102,6 +108,72 @@ export class ExpenseService {
     return expense;
   }
 
+  async voidExpense(member: GuildMember, expenseId: number): Promise<ExpenseRecord> {
+    const expense = this.requireExpense(expenseId);
+    this.assertCanModify(member, expense);
+    if (expense.voided) {
+      throw new Error("この出費記録はすでに取り消されています。");
+    }
+
+    this.expensesRepo.void(expense.id);
+    const updated = this.requireExpense(expense.id);
+    await this.postExpenseNotice(`⚠️ 出費 #${expense.id} は <@${member.id}> により取り消されました。`);
+    return updated;
+  }
+
+  async correct(member: GuildMember, expenseId: number, input: CorrectExpenseInput): Promise<ExpenseRecord> {
+    const original = this.requireExpense(expenseId);
+    this.assertCanModify(member, original);
+    if (original.voided) {
+      throw new Error("取り消し済みの出費記録は訂正できません。");
+    }
+    if (!original.thread_id) {
+      throw new Error("イベントに紐付いていない出費記録はここから訂正できません。");
+    }
+
+    const event = this.requireEvent(original.thread_id);
+    const amount = parseAmount(input.amount);
+    const recipientId = input.recipient.trim()
+      ? parseDiscordSnowflake(input.recipient, "last")
+      : null;
+    if (input.recipient.trim() && !recipientId) {
+      throw new Error("対象者は @ユーザー またはユーザーIDで入力してください。");
+    }
+
+    const now = unixNow();
+    this.expensesRepo.void(original.id);
+    const id = this.expensesRepo.create({
+      threadId: original.thread_id,
+      category: original.category,
+      amount,
+      direction: original.direction,
+      recipientId,
+      responderId: member.id,
+      memo: input.memo.trim() || original.memo,
+      occurredAt: original.occurred_at,
+      proofUrl: original.proof_url,
+      proofMsgId: original.proof_msg_id,
+      proofStatus: original.proof_status,
+      correctsId: original.id,
+      now
+    });
+
+    const corrected = this.requireExpense(id);
+    if (corrected.proof_status === "pending_proof") {
+      this.jobsRepo.create({
+        kind: "expense_proof_timeout",
+        payload: { expenseId: corrected.id },
+        threadId: original.thread_id,
+        fireAt: now + 5 * 60,
+        now
+      });
+    }
+    await this.postExpenseLog(corrected);
+    await this.postExpenseNotice(`✏️ 出費 #${original.id} を <@${member.id}> が訂正しました。訂正版: #${corrected.id}`);
+    await this.checkThresholds(event, corrected);
+    return corrected;
+  }
+
   async handleProofMessage(message: Message): Promise<void> {
     if (message.author.bot) {
       return;
@@ -131,7 +203,7 @@ export class ExpenseService {
 
   async handleProofTimeout(expenseId: number): Promise<void> {
     const expense = this.expensesRepo.get(expenseId);
-    if (!expense || expense.proof_status !== "pending_proof" || !expense.thread_id) {
+    if (!expense || expense.voided || expense.proof_status !== "pending_proof" || !expense.thread_id) {
       return;
     }
 
@@ -158,6 +230,18 @@ export class ExpenseService {
     await channel.send({
       content: buildExpenseLogMessage(event, expense)
     });
+  }
+
+  private async postExpenseNotice(content: string): Promise<void> {
+    const expenseLog = this.settingsRepo.get("expenseLog");
+    if (!expenseLog) {
+      return;
+    }
+
+    const channel = await this.client.channels.fetch(expenseLog);
+    if (channel && "send" in channel) {
+      await channel.send({ content });
+    }
   }
 
   private async checkThresholds(event: EventRecord, expense: ExpenseRecord): Promise<void> {
@@ -252,6 +336,13 @@ export class ExpenseService {
     if (!isPrize) {
       throw new ExpensePermissionError("出費記録は賞金・景品対応担当またはイベント統括のみ可能です。");
     }
+  }
+
+  private assertCanModify(member: GuildMember, expense: ExpenseRecord): void {
+    if (expense.responder_id === member.id || isEventLead(member, this.settingsRepo)) {
+      return;
+    }
+    throw new ExpensePermissionError("この出費記録を変更できるのは、記録者本人またはイベント統括のみです。");
   }
 
   private requireEvent(threadId: string): EventRecord {

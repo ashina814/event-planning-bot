@@ -1,0 +1,2 @@
+ALTER TABLE expenses ADD COLUMN corrects_id INTEGER REFERENCES expenses(id);
+ALTER TABLE expenses ADD COLUMN voided INTEGER NOT NULL DEFAULT 0;

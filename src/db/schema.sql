@@ -175,7 +175,9 @@ CREATE TABLE IF NOT EXISTS expenses (
   memo            TEXT,
   occurred_at     INTEGER NOT NULL,
   created_at      INTEGER NOT NULL,
-  proof_status    TEXT NOT NULL DEFAULT 'attached'
+  proof_status    TEXT NOT NULL DEFAULT 'attached',
+  corrects_id     INTEGER REFERENCES expenses(id),
+  voided          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_expenses_thread ON expenses(thread_id);

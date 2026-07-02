@@ -90,6 +90,11 @@ function runMigrations(db: Database.Database): void {
       continue;
     }
 
+    if (name === "005_expense_corrections.sql" && hasColumn(db, "expenses", "voided")) {
+      markMigrationApplied(db, name);
+      continue;
+    }
+
     const sql = readFileSync(resolve(migrationsDir, name), "utf8");
     const tx = db.transaction(() => {
       db.exec(sql);

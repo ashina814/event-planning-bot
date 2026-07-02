@@ -379,6 +379,13 @@ export class ParticipantsService {
     await this.recountPostConfig(threadId);
   }
 
+  async clear(member: GuildMember, threadId: string): Promise<void> {
+    this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanConfigure(member, roles);
+    this.participantsRepo.deleteConfig(threadId);
+  }
+
   async handleReactionAdd(
     reaction: MessageReaction | PartialMessageReaction,
     user: User | PartialUser

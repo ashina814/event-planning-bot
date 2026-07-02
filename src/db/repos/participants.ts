@@ -105,6 +105,15 @@ export class ParticipantsRepo {
     tx();
   }
 
+  deleteConfig(threadId: string): void {
+    const tx = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM participants_config WHERE thread_id = ?").run(threadId);
+      this.db.prepare("DELETE FROM participants_count_cache WHERE thread_id = ?").run(threadId);
+    });
+
+    tx();
+  }
+
   incrementCount(
     threadId: string,
     label: string,

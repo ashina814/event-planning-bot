@@ -60,13 +60,18 @@ import {
   buildAnnouncementTargetChannelSelect,
   buildAdminPanelComponents,
   buildEventsOverviewComponents,
+  buildEventDeleteConfirmComponents,
+  buildEventMoreComponents,
+  buildExpenseActions,
   buildExpenseCategorySelect,
   buildExpenseDirectionSelect,
   buildExpensePanelComponents,
+  buildExpenseVoidConfirmComponents,
   buildHandoverRoleSelect,
   buildMinutesTodoCandidateComponents,
   buildMinutesTodoReviewComponents,
   buildParticipantsPostChannelSelect,
+  buildParticipantsClearConfirmComponents,
   buildParticipantsSetupGuideComponents,
   buildRoleAssignUserSelect,
   buildRoleBulkComponents,
@@ -77,6 +82,7 @@ import {
   buildRoleTypeSelect,
   buildRoleUserSelect,
   buildStatusSelect,
+  buildStatusRollbackConfirmComponents,
   buildTimerPanelComponents,
   buildTimerNotificationComponents,
   buildTodoActions,
@@ -104,6 +110,7 @@ import {
   buildAdminRolesModal,
   buildEventScheduleModal,
   buildExpenseCreateModal,
+  buildExpenseCorrectModal,
   buildHandoverModal,
   buildMinutesTodoAdoptModal,
   buildRoleAddModal,
@@ -654,6 +661,71 @@ export function registerInteractionCreateListener(client: Client): void {
             return;
           }
 
+          if (action === "rollback") {
+            if (event.status === "done" || event.status === "cancelled") {
+              await interaction.update({
+                content:
+                  event.status === "done"
+                    ? "振り返り済みの完了を取り消しますか？"
+                    : "見送りを取り消して企画中に戻しますか？",
+                components: buildStatusRollbackConfirmComponents(threadId)
+              });
+              return;
+            }
+
+            await interaction.deferUpdate();
+            const member = await fetchGuildMember(interaction);
+            const service = new EventLifecycleService(
+              interaction.client,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.seriesRepo,
+              repos.jobsRepo,
+              repos.timersRepo,
+              repos.settingsRepo
+            );
+            const result = await service.rollbackStatus(member, threadId);
+            await interaction.editReply({
+              content: [
+                `状態を **${statusLabels[result.event.status]}** に戻しました。`,
+                result.warning
+              ].filter(Boolean).join("\n"),
+              components: []
+            });
+            return;
+          }
+
+          if (action === "rollback-confirm") {
+            await interaction.deferUpdate();
+            const member = await fetchGuildMember(interaction);
+            const service = new EventLifecycleService(
+              interaction.client,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.seriesRepo,
+              repos.jobsRepo,
+              repos.timersRepo,
+              repos.settingsRepo
+            );
+            const result = await service.rollbackStatus(member, threadId);
+            await interaction.editReply({
+              content: [
+                `状態を **${statusLabels[result.event.status]}** に戻しました。`,
+                result.warning
+              ].filter(Boolean).join("\n"),
+              components: []
+            });
+            return;
+          }
+
+          if (action === "rollback-cancel") {
+            await interaction.update({
+              content: "状態の巻き戻しをキャンセルしました。",
+              components: []
+            });
+            return;
+          }
+
           if (action === "handover") {
             const roles = repos.rolesRepo.listSlots(threadId, event.series_id);
             await interaction.reply({
@@ -747,8 +819,66 @@ export function registerInteractionCreateListener(client: Client): void {
                   panel.pendingProofCount
                 )
               ],
-              components: buildExpensePanelComponents(threadId),
+              components: buildExpensePanelComponents(threadId, panel.expenses),
               ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "more") {
+            await interaction.reply({
+              content: `イベント『${event.title}』のその他操作です。`,
+              components: buildEventMoreComponents(threadId),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "delete-choice") {
+            const mode = parts[3];
+            if (mode !== "data" && mode !== "thread") {
+              throw new Error("削除方式が不正です。");
+            }
+            await interaction.update({
+              content: [
+                "本当に削除しますか？この操作は取り消せません。",
+                mode === "thread"
+                  ? "DB レコードと Discord スレッドを削除します。"
+                  : "DB レコードだけを削除し、スレッドは 【bot管理外】 として残します。"
+              ].join("\n"),
+              components: buildEventDeleteConfirmComponents(threadId, mode)
+            });
+            return;
+          }
+
+          if (action === "delete-cancel") {
+            await interaction.update({
+              content: "削除をキャンセルしました。",
+              components: []
+            });
+            return;
+          }
+
+          if (action === "delete-confirm") {
+            const mode = parts[3];
+            if (mode !== "data" && mode !== "thread") {
+              throw new Error("削除方式が不正です。");
+            }
+            await interaction.deferUpdate();
+            const member = await fetchGuildMember(interaction);
+            const service = new EventLifecycleService(
+              interaction.client,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.seriesRepo,
+              repos.jobsRepo,
+              repos.timersRepo,
+              repos.settingsRepo
+            );
+            const title = await service.deleteEvent(member, threadId, mode);
+            await interaction.editReply({
+              content: `イベント『${title}』を削除しました。`,
+              components: []
             });
             return;
           }
@@ -1082,6 +1212,48 @@ export function registerInteractionCreateListener(client: Client): void {
             });
             return;
           }
+
+          if (action === "clear") {
+            await interaction.update({
+              content: "参加者カウント設定を解除しますか？集計キャッシュも削除されます。",
+              embeds: [],
+              components: buildParticipantsClearConfirmComponents(threadId)
+            });
+            return;
+          }
+
+          if (action === "clear-cancel") {
+            const event = repos.eventsRepo.get(threadId);
+            const panel = service.getPanel(threadId);
+            await interaction.update({
+              content: "",
+              embeds: event ? [buildParticipantsPanelEmbed(event, panel.config, panel.counts)] : [],
+              components: buildParticipantsPanelComponents(threadId, panel.config)
+            });
+            return;
+          }
+
+          if (action === "clear-confirm") {
+            await interaction.deferUpdate();
+            const member = await fetchGuildMember(interaction);
+            await service.clear(member, threadId);
+            const event = repos.eventsRepo.get(threadId);
+            const panel = service.getPanel(threadId);
+            await interaction.editReply({
+              content: "参加者カウント設定を解除しました。",
+              embeds: event ? [buildParticipantsPanelEmbed(event, panel.config, panel.counts)] : [],
+              components: buildParticipantsPanelComponents(threadId, panel.config)
+            });
+            return;
+          }
+
+          if (action === "change-target") {
+            await interaction.reply({
+              content: "新しい対象メッセージを右クリック → アプリ → 参加者カウント対象に設定 から指定してください。新しい設定が確定すると上書きされます。",
+              ephemeral: true
+            });
+            return;
+          }
         }
 
         if (namespace === "expense") {
@@ -1091,6 +1263,97 @@ export function registerInteractionCreateListener(client: Client): void {
               components: buildExpenseCategorySelect(threadId),
               ephemeral: true
             });
+            return;
+          }
+
+          if (action === "void") {
+            const expenseId = Number(parts[3] ?? 0);
+            if (!expenseId) {
+              throw new Error("出費 ID が不正です。");
+            }
+            await interaction.update({
+              content: `出費 #${expenseId} を取り消しますか？記録自体は履歴として残ります。`,
+              embeds: [],
+              components: buildExpenseVoidConfirmComponents(threadId, expenseId)
+            });
+            return;
+          }
+
+          if (action === "void-cancel") {
+            const service = new ExpenseService(
+              interaction.client,
+              repos.expensesRepo,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.jobsRepo,
+              repos.settingsRepo
+            );
+            const event = repos.eventsRepo.get(threadId);
+            const panel = service.getPanel(threadId);
+            await interaction.update({
+              content: "",
+              embeds: event
+                ? [
+                    buildExpensePanelEmbed(
+                      event,
+                      panel.expenses,
+                      panel.totalOut,
+                      panel.totalIn,
+                      panel.pendingProofCount
+                    )
+                  ]
+                : [],
+              components: buildExpensePanelComponents(threadId, panel.expenses)
+            });
+            return;
+          }
+
+          if (action === "void-confirm") {
+            const expenseId = Number(parts[3] ?? 0);
+            if (!expenseId) {
+              throw new Error("出費 ID が不正です。");
+            }
+            await interaction.deferUpdate();
+            const member = await fetchGuildMember(interaction);
+            const service = new ExpenseService(
+              interaction.client,
+              repos.expensesRepo,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.jobsRepo,
+              repos.settingsRepo
+            );
+            await service.voidExpense(member, expenseId);
+            const event = repos.eventsRepo.get(threadId);
+            const panel = service.getPanel(threadId);
+            await interaction.editReply({
+              content: `出費 #${expenseId} を取り消しました。`,
+              embeds: event
+                ? [
+                    buildExpensePanelEmbed(
+                      event,
+                      panel.expenses,
+                      panel.totalOut,
+                      panel.totalIn,
+                      panel.pendingProofCount
+                    )
+                  ]
+                : [],
+              components: buildExpensePanelComponents(threadId, panel.expenses)
+            });
+            return;
+          }
+
+          if (action === "correct") {
+            const expenseId = Number(parts[3] ?? 0);
+            if (!expenseId) {
+              throw new Error("出費 ID が不正です。");
+            }
+            const expense = repos.expensesRepo.get(expenseId);
+            if (!expense) {
+              throw new Error("出費記録が見つかりません。");
+            }
+            await interaction.showModal(buildExpenseCorrectModal(threadId, expense));
             return;
           }
         }
@@ -1296,6 +1559,25 @@ export function registerInteractionCreateListener(client: Client): void {
             throw new Error("未知の出費方向です。");
           }
           await interaction.showModal(buildExpenseCreateModal(threadId, category, value));
+          return;
+        }
+
+        if (namespace === "expense" && action === "select") {
+          const expenseId = Number(value);
+          const expense = repos.expensesRepo.get(expenseId);
+          if (!expense) {
+            throw new Error("出費記録が見つかりません。");
+          }
+          await interaction.update({
+            content: [
+              `出費 #${expense.id}`,
+              `金額: ${expense.amount.toLocaleString("ja-JP")} Land`,
+              `対象者: ${expense.recipient_id ? `<@${expense.recipient_id}>` : "未設定"}`,
+              `メモ: ${expense.memo ?? "なし"}`
+            ].join("\n"),
+            embeds: [],
+            components: buildExpenseActions(threadId, expense)
+          });
           return;
         }
 
@@ -1735,7 +2017,47 @@ export function registerInteractionCreateListener(client: Client): void {
                   )
                 ]
               : [],
-            components: buildExpensePanelComponents(threadId)
+            components: buildExpensePanelComponents(threadId, panel.expenses)
+          });
+          return;
+        }
+
+        if (namespace === "expense" && action === "correct-submit") {
+          await interaction.deferReply({ ephemeral: true });
+          const expenseId = Number(interaction.customId.split(":")[3] ?? 0);
+          if (!expenseId) {
+            throw new Error("出費 ID が不正です。");
+          }
+          const amount = interaction.fields.getTextInputValue("amount");
+          const recipient = interaction.fields.getTextInputValue("recipient");
+          const memo = interaction.fields.getTextInputValue("memo");
+          const member = await fetchGuildMember(interaction);
+          const repos = createRepos(getDb());
+          const service = new ExpenseService(
+            interaction.client,
+            repos.expensesRepo,
+            repos.eventsRepo,
+            repos.rolesRepo,
+            repos.jobsRepo,
+            repos.settingsRepo
+          );
+          const corrected = await service.correct(member, expenseId, { amount, recipient, memo });
+          const event = repos.eventsRepo.get(threadId);
+          const panel = service.getPanel(threadId);
+          await interaction.editReply({
+            content: `出費 #${expenseId} を訂正しました。訂正版: #${corrected.id}`,
+            embeds: event
+              ? [
+                  buildExpensePanelEmbed(
+                    event,
+                    panel.expenses,
+                    panel.totalOut,
+                    panel.totalIn,
+                    panel.pendingProofCount
+                  )
+                ]
+              : [],
+            components: buildExpensePanelComponents(threadId, panel.expenses)
           });
           return;
         }

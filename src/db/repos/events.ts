@@ -125,7 +125,7 @@ export class EventsRepo {
     this.db
       .prepare(
         `UPDATE events
-         SET status = ?, updated_at = ?, closed_at = COALESCE(?, closed_at)
+         SET status = ?, updated_at = ?, closed_at = ?
          WHERE thread_id = ?`
       )
       .run(status, now, closedAt, threadId);
@@ -141,5 +141,9 @@ export class EventsRepo {
     this.db
       .prepare("UPDATE events SET scheduled_at = ?, updated_at = ? WHERE thread_id = ?")
       .run(scheduledAt, now, threadId);
+  }
+
+  delete(threadId: string): void {
+    this.db.prepare("DELETE FROM events WHERE thread_id = ?").run(threadId);
   }
 }

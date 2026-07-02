@@ -224,6 +224,8 @@ export interface ExpenseRecord {
   occurred_at: number;
   created_at: number;
   proof_status: "attached" | "pending_proof";
+  corrects_id: number | null;
+  voided: number;
 }
 
 export interface ExpenseThresholdRecord {

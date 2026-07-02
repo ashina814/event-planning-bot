@@ -11,7 +11,7 @@ import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SeriesRepo } from "../../db/repos/series.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
 import type { TimersRepo } from "../../db/repos/timers.js";
-import { assertCanCreateEvent, assertCanManageEvent, fetchGuildMember } from "../../lib/permission.js";
+import { assertCanCreateEvent, assertCanManageEvent, fetchGuildMember, isEventLead } from "../../lib/permission.js";
 import { titleWithStatusPrefix } from "../../lib/parser.js";
 import { formatJstDateTime, jstDateTimeToUnix, unixNow } from "../../lib/time.js";
 import type { EventRecord, EventStatus } from "../../types/index.js";
@@ -29,6 +29,8 @@ const eventRescheduleJobKinds = [
   "event_reminder_retrospective",
   "event_auto_progress"
 ] as const;
+
+type DeleteEventMode = "data" | "thread";
 
 export class EventLifecycleService {
   constructor(
@@ -124,6 +126,60 @@ export class EventLifecycleService {
     await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
 
     return this.requireEvent(threadId);
+  }
+
+  async rollbackStatus(member: GuildMember, threadId: string): Promise<{ event: EventRecord; warning: string | null }> {
+    const event = this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    assertCanManageEvent(member, event, roles, this.settingsRepo);
+
+    const nextStatus = this.previousStatus(event.status);
+    if (!nextStatus) {
+      throw new Error("企画中からは戻せません。");
+    }
+    if ((event.status === "done" || event.status === "cancelled") && !isEventLead(member, this.settingsRepo)) {
+      throw new Error("完了・見送りの取り消しはイベント統括のみ可能です。");
+    }
+
+    const now = unixNow();
+    this.eventsRepo.updateStatus(threadId, nextStatus, now);
+    await this.renameThread(threadId, nextStatus, event.title);
+    await syncEventArtifacts(this.client, this.eventsRepo, this.rolesRepo, this.seriesRepo, threadId);
+
+    const warning =
+      event.status === "cancelled" && event.scheduled_at && event.scheduled_at <= now
+        ? "開催日時が過去のままです。[日時] から更新してください。"
+        : null;
+    return { event: this.requireEvent(threadId), warning };
+  }
+
+  async deleteEvent(member: GuildMember, threadId: string, mode: DeleteEventMode): Promise<string> {
+    const event = this.requireEvent(threadId);
+    if (!isEventLead(member, this.settingsRepo)) {
+      throw new Error("イベントを削除できるのはイベント統括のみです。");
+    }
+
+    this.jobsRepo.cancelJobsByThread(threadId);
+    const channel = await this.client.channels.fetch(threadId).catch(() => null);
+    const manageableChannel = channel as { setName?: (name: string, reason?: string) => Promise<unknown> } | null;
+    if (mode === "data" && manageableChannel?.setName) {
+      await manageableChannel.setName(
+        truncateDiscordName(`【bot管理外】${event.title}`),
+        "Event removed from bot management"
+      );
+    }
+
+    this.eventsRepo.delete(threadId);
+
+    const deletableChannel = channel as { delete?: (reason?: string) => Promise<unknown> } | null;
+    if (mode === "thread" && deletableChannel?.delete) {
+      await deletableChannel.delete("Event deleted by bot");
+    }
+
+    await member.send(
+      `${member} がイベント『${event.title}』を削除しました (方式: ${mode === "thread" ? "スレッドごと" : "データのみ"})`
+    ).catch(() => null);
+    return event.title;
   }
 
   async setSchedule(member: GuildMember, threadId: string, input: string): Promise<EventRecord> {
@@ -259,6 +315,23 @@ export class EventLifecycleService {
         truncateDiscordName(titleWithStatusPrefix(status, title)),
         "Event status changed"
       );
+    }
+  }
+
+  private previousStatus(status: EventStatus): EventStatus | null {
+    switch (status) {
+      case "announced":
+        return "announcing";
+      case "announcing":
+        return "planning";
+      case "in_progress":
+        return "announced";
+      case "done":
+        return "announced";
+      case "cancelled":
+        return "planning";
+      case "planning":
+        return null;
     }
   }
 

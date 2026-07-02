@@ -14,6 +14,7 @@ import {
   type AnnouncementRecord,
   type EventRecord,
   type EventStatus,
+  type ExpenseRecord,
   type RoleSlot,
   type RoleType,
   type TodoRecord
@@ -52,8 +53,7 @@ export function buildControlPanelComponents(
         .setCustomId(`event:status:${event.thread_id}`)
         .setEmoji("🔄")
         .setLabel("状態")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(isClosed),
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`event:schedule:${event.thread_id}`)
         .setEmoji("📅")
@@ -98,6 +98,13 @@ export function buildControlPanelComponents(
         .setLabel("出費")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(isClosed)
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`event:more:${event.thread_id}`)
+        .setEmoji("⚙️")
+        .setLabel("その他")
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }
@@ -117,24 +124,246 @@ export function allowedStatusTransitions(status: EventStatus): EventStatus[] {
   }
 }
 
+export function rollbackStatusTarget(status: EventStatus): EventStatus | null {
+  switch (status) {
+    case "announced":
+      return "announcing";
+    case "announcing":
+      return "planning";
+    case "in_progress":
+      return "announced";
+    case "done":
+      return "announced";
+    case "cancelled":
+      return "planning";
+    case "planning":
+      return null;
+  }
+}
+
 export function buildStatusSelect(
   event: EventRecord
-): ActionRowBuilder<StringSelectMenuBuilder>[] {
+): Array<ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>> {
   const transitions = allowedStatusTransitions(event.status);
-  if (transitions.length === 0) {
-    return [];
+  const rows: Array<ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>> = [];
+
+  if (transitions.length > 0) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`event:status-select:${event.thread_id}`)
+          .setPlaceholder("変更後の状態")
+          .addOptions(
+            transitions.map((status) => ({
+              label: statusLabels[status],
+              value: status,
+              description: `${statusLabels[event.status]} から ${statusLabels[status]} へ変更`
+            }))
+          )
+      )
+    );
   }
 
+  const rollback = rollbackStatusTarget(event.status);
+  if (rollback) {
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`event:rollback:${event.thread_id}`)
+          .setEmoji("↩️")
+          .setLabel(`1つ前に戻す (${statusLabels[rollback]})`.slice(0, 80))
+          .setStyle(ButtonStyle.Secondary)
+      )
+    );
+  }
+
+  return rows;
+}
+
+export function buildEventMoreComponents(threadId: string): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`event:delete-choice:${threadId}:data`)
+        .setLabel("削除する (データのみ)")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`event:delete-choice:${threadId}:thread`)
+        .setLabel("削除する (スレッドごと)")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`event:delete-cancel:${threadId}`)
+        .setLabel("キャンセル")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildEventDeleteConfirmComponents(
+  threadId: string,
+  mode: "data" | "thread"
+): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`event:delete-confirm:${threadId}:${mode}`)
+        .setLabel("はい、削除します")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`event:delete-cancel:${threadId}`)
+        .setLabel("キャンセル")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildStatusRollbackConfirmComponents(threadId: string): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`event:rollback-confirm:${threadId}`)
+        .setLabel("戻す")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`event:rollback-cancel:${threadId}`)
+        .setLabel("キャンセル")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildParticipantsPanelComponents(
+  threadId: string,
+  config: ParticipantsConfigRecord | null
+): ActionRowBuilder<ButtonBuilder>[] {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`participants:setup:${threadId}`)
+      .setEmoji(config ? "🔁" : "➕")
+      .setLabel(config ? "再設定" : "設定")
+      .setStyle(config ? ButtonStyle.Secondary : ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`participants:refresh:${threadId}`)
+      .setEmoji("🔄")
+      .setLabel("再集計")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!config)
+  );
+
+  if (config) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`participants:clear:${threadId}`)
+        .setEmoji("🧹")
+        .setLabel("設定を解除")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`participants:change-target:${threadId}`)
+        .setLabel("対象を変更")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+
+  return [row];
+}
+
+export function buildParticipantsClearConfirmComponents(threadId: string): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`participants:clear-confirm:${threadId}`)
+        .setLabel("解除する")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`participants:clear-cancel:${threadId}`)
+        .setLabel("キャンセル")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildExpensePanelComponents(
+  threadId: string,
+  expenses: ExpenseRecord[] = []
+): Array<ActionRowBuilder<ButtonBuilder> | ActionRowBuilder<StringSelectMenuBuilder>> {
+  const rows: Array<ActionRowBuilder<ButtonBuilder> | ActionRowBuilder<StringSelectMenuBuilder>> = [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`expense:new:${threadId}`)
+        .setEmoji("➕")
+        .setLabel("記録追加")
+        .setStyle(ButtonStyle.Primary)
+    )
+  ];
+
+  const activeExpenses = expenses.filter((expense) => !expense.voided);
+  if (activeExpenses.length > 0) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`expense:select:${threadId}`)
+          .setPlaceholder("訂正・取り消しする記録を選択")
+          .addOptions(
+            activeExpenses.slice(0, 25).map((expense) => ({
+              label: `#${expense.id} ${expense.amount.toLocaleString("ja-JP")} Land`.slice(0, 100),
+              value: String(expense.id),
+              description: selectText(expense.memo ?? "用途メモなし", 80)
+            }))
+          )
+      )
+    );
+  }
+
+  return rows;
+}
+
+export function buildExpenseActions(threadId: string, expense: ExpenseRecord): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`expense:correct:${threadId}:${expense.id}`)
+        .setEmoji("✏️")
+        .setLabel("訂正")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(Boolean(expense.voided)),
+      new ButtonBuilder()
+        .setCustomId(`expense:void:${threadId}:${expense.id}`)
+        .setEmoji("🗑️")
+        .setLabel("取り消し")
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(Boolean(expense.voided))
+    )
+  ];
+}
+
+export function buildExpenseVoidConfirmComponents(
+  threadId: string,
+  expenseId: number
+): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`expense:void-confirm:${threadId}:${expenseId}`)
+        .setLabel("取り消す")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`expense:void-cancel:${threadId}`)
+        .setLabel("キャンセル")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildExpenseCategorySelect(threadId: string): ActionRowBuilder<StringSelectMenuBuilder>[] {
   return [
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(`event:status-select:${event.thread_id}`)
-        .setPlaceholder("変更後の状態")
+        .setCustomId(`expense:new-category:${threadId}`)
+        .setPlaceholder("出費カテゴリを選択")
         .addOptions(
-          transitions.map((status) => ({
-            label: statusLabels[status],
-            value: status,
-            description: `${statusLabels[event.status]} から ${statusLabels[status]} へ変更`
+          expenseCategories.map((category) => ({
+            label: expenseCategoryLabels[category] ?? category,
+            value: category
           }))
         )
     )
@@ -538,27 +767,6 @@ export function buildTimerNotificationComponents(
   ];
 }
 
-export function buildParticipantsPanelComponents(
-  threadId: string,
-  config: ParticipantsConfigRecord | null
-): ActionRowBuilder<ButtonBuilder>[] {
-  return [
-    new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`participants:setup:${threadId}`)
-        .setEmoji(config ? "🔁" : "➕")
-        .setLabel(config ? "再設定" : "設定")
-        .setStyle(config ? ButtonStyle.Secondary : ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`participants:refresh:${threadId}`)
-        .setEmoji("🔄")
-        .setLabel("再集計")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(!config)
-    )
-  ];
-}
-
 export function buildParticipantsSetupGuideComponents(threadId: string): ActionRowBuilder<ButtonBuilder>[] {
   return [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -708,34 +916,6 @@ export function buildMinutesTodoCandidateComponents(
   );
 
   return rows;
-}
-
-export function buildExpensePanelComponents(threadId: string): ActionRowBuilder<ButtonBuilder>[] {
-  return [
-    new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`expense:new:${threadId}`)
-        .setEmoji("➕")
-        .setLabel("記録追加")
-        .setStyle(ButtonStyle.Primary)
-    )
-  ];
-}
-
-export function buildExpenseCategorySelect(threadId: string): ActionRowBuilder<StringSelectMenuBuilder>[] {
-  return [
-    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId(`expense:new-category:${threadId}`)
-        .setPlaceholder("出費カテゴリを選択")
-        .addOptions(
-          expenseCategories.map((category) => ({
-            label: expenseCategoryLabels[category] ?? category,
-            value: category
-          }))
-        )
-    )
-  ];
 }
 
 export function buildExpenseDirectionSelect(

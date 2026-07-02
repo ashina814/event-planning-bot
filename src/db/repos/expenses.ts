@@ -16,6 +16,10 @@ interface CreateExpenseInput {
   responderId: string;
   memo: string | null;
   occurredAt: number;
+  proofUrl?: string | null;
+  proofMsgId?: string | null;
+  proofStatus?: ExpenseRecord["proof_status"];
+  correctsId?: number | null;
   now: number;
 }
 
@@ -27,8 +31,9 @@ export class ExpensesRepo {
       .prepare(
         `INSERT INTO expenses (
           thread_id, category, amount, direction, recipient_id, responder_id,
-          proof_url, proof_msg_id, memo, occurred_at, created_at, proof_status
-        ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, 'pending_proof')`
+          proof_url, proof_msg_id, memo, occurred_at, created_at, proof_status,
+          corrects_id, voided
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
       )
       .run(
         input.threadId,
@@ -37,9 +42,13 @@ export class ExpensesRepo {
         input.direction,
         input.recipientId,
         input.responderId,
+        input.proofUrl ?? null,
+        input.proofMsgId ?? null,
         input.memo,
         input.occurredAt,
-        input.now
+        input.now,
+        input.proofStatus ?? "pending_proof",
+        input.correctsId ?? null
       );
 
     return Number(result.lastInsertRowid);
@@ -67,8 +76,9 @@ export class ExpensesRepo {
       this.db
         .prepare(
           `SELECT * FROM expenses
-           WHERE responder_id = ?
+         WHERE responder_id = ?
              AND proof_status = 'pending_proof'
+             AND voided = 0
              AND created_at >= ?
            ORDER BY created_at DESC
            LIMIT 1`
@@ -92,7 +102,7 @@ export class ExpensesRepo {
       .prepare(
         `SELECT COALESCE(SUM(amount), 0) AS total
          FROM expenses
-         WHERE thread_id = ? AND direction = ?`
+         WHERE thread_id = ? AND direction = ? AND voided = 0`
       )
       .get(threadId, direction) as { total: number };
     return row.total;
@@ -103,7 +113,7 @@ export class ExpensesRepo {
       .prepare(
         `SELECT COALESCE(SUM(amount), 0) AS total
          FROM expenses
-         WHERE occurred_at >= ? AND occurred_at < ? AND direction = ?`
+         WHERE occurred_at >= ? AND occurred_at < ? AND direction = ? AND voided = 0`
       )
       .get(startAt, endAt, direction) as { total: number };
     return row.total;
@@ -118,7 +128,7 @@ export class ExpensesRepo {
       .prepare(
         `SELECT category, COALESCE(SUM(amount), 0) AS total
          FROM expenses
-         WHERE occurred_at >= ? AND occurred_at < ? AND direction = ?
+         WHERE occurred_at >= ? AND occurred_at < ? AND direction = ? AND voided = 0
          GROUP BY category
          ORDER BY total DESC, category ASC`
       )
@@ -134,6 +144,7 @@ export class ExpensesRepo {
          WHERE expenses.occurred_at >= ?
            AND expenses.occurred_at < ?
            AND expenses.direction = 'out'
+           AND expenses.voided = 0
          GROUP BY COALESCE(events.title, '未紐付け')
          ORDER BY total DESC, title ASC
          LIMIT ?`
@@ -146,10 +157,14 @@ export class ExpensesRepo {
       .prepare(
         `SELECT COUNT(*) AS count
          FROM expenses
-         WHERE thread_id = ? AND proof_status = 'pending_proof'`
+         WHERE thread_id = ? AND proof_status = 'pending_proof' AND voided = 0`
       )
       .get(threadId) as { count: number };
     return row.count;
+  }
+
+  void(id: number): void {
+    this.db.prepare("UPDATE expenses SET voided = 1 WHERE id = ?").run(id);
   }
 
   ensureDefaultThresholds(now: number): void {

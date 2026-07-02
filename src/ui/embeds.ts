@@ -520,7 +520,8 @@ export function buildExpensePanelEmbed(
       .map((expense) => {
         const proof = expense.proof_status === "attached" ? "証明済" : "証明待ち";
         const recipient = expense.recipient_id ? ` / <@${expense.recipient_id}>` : "";
-        return `• #${expense.id} ${expenseDirectionLabel(expense)} ${expense.amount.toLocaleString("ja-JP")} Land / ${expenseCategoryLabel(expense)}${recipient} / ${formatJstDateTime(expense.occurred_at)} / ${proof}`;
+        const state = expense.voided ? "取消済 / " : "";
+        return `• #${expense.id} ${state}${expenseDirectionLabel(expense)} ${expense.amount.toLocaleString("ja-JP")} Land / ${expenseCategoryLabel(expense)}${recipient} / ${formatJstDateTime(expense.occurred_at)} / ${proof}`;
       })
       .join("\n")
       .slice(0, 1024)
