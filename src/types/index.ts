@@ -130,7 +130,7 @@ export interface TimerScheduleRecord {
   notify_channel: string;
   mention_role: string | null;
   pre_notice_min: number;
-  state: "idle" | "running" | "finished";
+  state: "idle" | "armed" | "running" | "finished";
   created_at: number;
 }
 

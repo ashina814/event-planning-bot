@@ -38,6 +38,7 @@ interface TimerNoticeRef {
 }
 
 const activeTimerNotices = new Map<number, TimerNoticeRef>();
+const timerJobKinds = ["timer_section_prenotice", "timer_section_start"];
 
 export class TimekeeperPermissionError extends Error {
   override name = "TimekeeperPermissionError";
@@ -108,41 +109,130 @@ export class TimekeeperService {
     });
 
     const sections = this.timersRepo.listSections(scheduleId);
-    for (const section of sections) {
-      if (preNoticeMin > 0) {
-        this.jobsRepo.create({
-          kind: "timer_section_prenotice",
-          payload: {
-            scheduleId,
-            sectionId: section.id,
-            threadId,
-            minutes: preNoticeMin
-          },
-          threadId,
-          fireAt: section.planned_start - preNoticeMin * 60,
-          now
-        });
-      }
-
-      this.jobsRepo.create({
-        kind: "timer_section_start",
-        payload: {
-          scheduleId,
-          sectionId: section.id,
-          threadId
-        },
-        threadId,
-        fireAt: section.planned_start,
-        now
-      });
-    }
-
     // Keep the ids materialized during setup; this catches insertion mismatches early.
     if (sectionIds.length !== sections.length) {
       throw new Error("タイマーセクションの保存に失敗しました。");
     }
 
     return this.requireSchedule(scheduleId);
+  }
+
+  async arm(member: GuildMember, threadId: string, scheduleId: number): Promise<TimerScheduleRecord> {
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanOperate(member, roles);
+    const schedule = this.requireSchedule(scheduleId);
+    if (schedule.thread_id !== threadId) {
+      throw new Error("指定されたタイマー設定がこのイベントのものではありません。");
+    }
+    if (schedule.state !== "idle") {
+      throw new Error("確定できるのは仕込み済みのタイマーだけです。");
+    }
+
+    const sections = this.timersRepo.listSections(schedule.id);
+    if (sections.length === 0) {
+      throw new Error("タイマーセクションがありません。");
+    }
+
+    const now = unixNow();
+    this.jobsRepo.cancelJobsByThread(threadId, timerJobKinds);
+    this.timersRepo.updateScheduleState(schedule.id, "armed");
+    const armed = this.requireSchedule(schedule.id);
+    this.registerSectionJobs(armed, sections, now);
+    await this.sync(threadId);
+    return armed;
+  }
+
+  async returnToIdle(member: GuildMember, threadId: string, scheduleId: number): Promise<TimerScheduleRecord> {
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanOperate(member, roles);
+    const schedule = this.requireSchedule(scheduleId);
+    if (schedule.thread_id !== threadId) {
+      throw new Error("指定されたタイマー設定がこのイベントのものではありません。");
+    }
+    if (schedule.state !== "armed") {
+      throw new Error("編集に戻せるのは確定済みのタイマーだけです。");
+    }
+
+    this.jobsRepo.cancelJobsByThread(threadId, timerJobKinds);
+    this.timersRepo.updateScheduleState(schedule.id, "idle");
+    const updated = this.requireSchedule(schedule.id);
+    await this.sync(threadId);
+    return updated;
+  }
+
+  async shift(
+    member: GuildMember,
+    threadId: string,
+    scheduleId: number,
+    minutes: number
+  ): Promise<TimerScheduleRecord> {
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanOperate(member, roles);
+    if (!Number.isInteger(minutes) || minutes === 0 || Math.abs(minutes) > 240) {
+      throw new Error("ずらす分数は -240 から 240 の整数で入力してください。");
+    }
+
+    const schedule = this.requireSchedule(scheduleId);
+    if (schedule.thread_id !== threadId) {
+      throw new Error("指定されたタイマー設定がこのイベントのものではありません。");
+    }
+    if (schedule.state !== "armed" && schedule.state !== "running") {
+      throw new Error("時間をずらせるのは確定済みまたは進行中のタイマーだけです。");
+    }
+
+    this.timersRepo.shiftPlannedStarts(schedule.id, minutes * 60, schedule.state === "running");
+    this.jobsRepo.cancelJobsByThread(threadId, timerJobKinds);
+    const updated = this.requireSchedule(schedule.id);
+    const sections = this.timersRepo.listSections(schedule.id);
+    this.registerSectionJobs(updated, sections, unixNow());
+
+    const direction = minutes > 0 ? "後ろ倒し" : "前倒し";
+    const channel = await this.client.channels.fetch(updated.notify_channel).catch(() => null);
+    if (channel && "send" in channel) {
+      await channel.send({
+        content: `タイムテーブルを ${Math.abs(minutes)} 分${direction}しました (<@${member.id}>)`
+      });
+    }
+
+    await this.sync(threadId);
+    return updated;
+  }
+
+  canCopyPreviousTimetable(threadId: string): boolean {
+    return this.buildCopiedTimetable(threadId) !== null;
+  }
+
+  buildCopiedTimetable(threadId: string): string | null {
+    const event = this.requireEvent(threadId);
+    if (!event.series_id) {
+      return null;
+    }
+
+    const currentStart = event.scheduled_at ?? unixNow();
+    const previousSchedule = this.timersRepo.latestScheduleForPreviousSeriesEvent(
+      event.series_id,
+      event.thread_id,
+      currentStart
+    );
+    if (!previousSchedule) {
+      return null;
+    }
+
+    const previousEvent = this.eventsRepo.get(previousSchedule.thread_id);
+    const previousSections = this.timersRepo.listSections(previousSchedule.id);
+    if (previousSections.length === 0) {
+      return null;
+    }
+
+    const previousStart = previousEvent?.scheduled_at ?? previousSections[0]?.planned_start ?? null;
+    if (!previousStart) {
+      return null;
+    }
+
+    const delta = currentStart - previousStart;
+    return previousSections
+      .map((section) => `${formatJstTime(section.planned_start + delta)} ${section.name}`)
+      .join("\n");
   }
 
   async next(member: GuildMember, threadId: string, scheduleId: number): Promise<string> {
@@ -152,6 +242,9 @@ export class TimekeeperService {
     const schedule = this.requireSchedule(scheduleId);
     if (schedule.thread_id !== threadId) {
       throw new Error("指定されたタイマー設定がこのイベントのものではありません。");
+    }
+    if (schedule.state === "idle") {
+      throw new Error("タイマーはまだ未確定です。[この内容で確定] を押してから開始してください。");
     }
     const sections = this.timersRepo.listSections(scheduleId);
     if (sections.length === 0) {
@@ -199,6 +292,9 @@ export class TimekeeperService {
     if (schedule.thread_id !== threadId) {
       throw new Error("指定されたタイマー設定がこのイベントのものではありません。");
     }
+    if (schedule.state === "idle") {
+      throw new Error("タイマーはまだ未確定です。[この内容で確定] を押してから開始してください。");
+    }
 
     const sections = this.timersRepo.listSections(scheduleId);
     const active = sections.find(
@@ -231,7 +327,7 @@ export class TimekeeperService {
     if (!section || section.schedule_id !== scheduleId) {
       throw new Error("タイマーセクションが DB に見つかりません。");
     }
-    if (schedule.state === "finished") {
+    if (schedule.state === "idle" || schedule.state === "finished") {
       return;
     }
 
@@ -293,6 +389,50 @@ export class TimekeeperService {
       });
     } catch {
       // Notification messages are best-effort; missing/deleted messages should not stop timers.
+    }
+  }
+
+  private registerSectionJobs(
+    schedule: TimerScheduleRecord,
+    sections: TimerSectionRecord[],
+    now: number
+  ): void {
+    for (const section of sections) {
+      if (schedule.state === "running" && section.actual_start !== null) {
+        continue;
+      }
+
+      if (schedule.pre_notice_min > 0) {
+        const preNoticeAt = section.planned_start - schedule.pre_notice_min * 60;
+        if (preNoticeAt > now) {
+          this.jobsRepo.create({
+            kind: "timer_section_prenotice",
+            payload: {
+              scheduleId: schedule.id,
+              sectionId: section.id,
+              threadId: schedule.thread_id,
+              minutes: schedule.pre_notice_min
+            },
+            threadId: schedule.thread_id,
+            fireAt: preNoticeAt,
+            now
+          });
+        }
+      }
+
+      if (section.planned_start > now) {
+        this.jobsRepo.create({
+          kind: "timer_section_start",
+          payload: {
+            scheduleId: schedule.id,
+            sectionId: section.id,
+            threadId: schedule.thread_id
+          },
+          threadId: schedule.thread_id,
+          fireAt: section.planned_start,
+          now
+        });
+      }
     }
   }
 

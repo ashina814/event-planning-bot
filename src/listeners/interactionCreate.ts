@@ -95,6 +95,8 @@ import {
   buildStatusRollbackConfirmComponents,
   buildTimerPanelComponents,
   buildTimerNotificationComponents,
+  buildTimerSetupChoiceComponents,
+  buildTimerShiftSelect,
   buildTodoActions,
   buildTodoPanelComponents
 } from "../ui/buttons.js";
@@ -126,7 +128,8 @@ import {
   buildMinutesTodoAdoptModal,
   buildRoleAddModal,
   buildTodoAddModal,
-  buildTimerSetupModal
+  buildTimerSetupModal,
+  buildTimerShiftCustomModal
 } from "../ui/modals.js";
 import { roleLabels, statusLabels } from "../ui/labels.js";
 
@@ -1083,7 +1086,30 @@ export function registerInteractionCreateListener(client: Client): void {
           );
 
           if (action === "setup") {
+            const canCopyPrevious = service.canCopyPreviousTimetable(threadId);
+            if (canCopyPrevious) {
+              await interaction.update({
+                content: "タイムテーブルの作り方を選んでください。",
+                embeds: [],
+                components: buildTimerSetupChoiceComponents(threadId, true)
+              });
+              return;
+            }
             await interaction.showModal(buildTimerSetupModal(threadId));
+            return;
+          }
+
+          if (action === "setup-new") {
+            await interaction.showModal(buildTimerSetupModal(threadId));
+            return;
+          }
+
+          if (action === "copy-previous") {
+            const copied = service.buildCopiedTimetable(threadId);
+            if (!copied) {
+              throw new Error("コピーできる前回のタイムテーブルが見つかりません。");
+            }
+            await interaction.showModal(buildTimerSetupModal(threadId, copied));
             return;
           }
 
@@ -1094,6 +1120,52 @@ export function registerInteractionCreateListener(client: Client): void {
             await interaction.reply({
               embeds: event ? [buildTimerPanelEmbed(event, timer, sections)] : [],
               components: buildTimerPanelComponents(threadId, timer),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "arm") {
+            if (!scheduleId) {
+              throw new Error("タイマー設定 ID が不正です。");
+            }
+            await interaction.deferReply({ ephemeral: true });
+            const member = await fetchGuildMember(interaction);
+            const schedule = await service.arm(member, threadId, scheduleId);
+            const event = repos.eventsRepo.get(threadId);
+            const sections = repos.timersRepo.listSections(schedule.id);
+            await interaction.editReply({
+              content: "タイマーを確定しました。通知ジョブを登録しました。",
+              embeds: event ? [buildTimerPanelEmbed(event, schedule, sections)] : [],
+              components: buildTimerPanelComponents(threadId, schedule)
+            });
+            return;
+          }
+
+          if (action === "edit") {
+            if (!scheduleId) {
+              throw new Error("タイマー設定 ID が不正です。");
+            }
+            await interaction.deferReply({ ephemeral: true });
+            const member = await fetchGuildMember(interaction);
+            const schedule = await service.returnToIdle(member, threadId, scheduleId);
+            const event = repos.eventsRepo.get(threadId);
+            const sections = repos.timersRepo.listSections(schedule.id);
+            await interaction.editReply({
+              content: "タイマーを編集可能な仕込み状態に戻しました。通知ジョブはキャンセルしました。",
+              embeds: event ? [buildTimerPanelEmbed(event, schedule, sections)] : [],
+              components: buildTimerPanelComponents(threadId, schedule)
+            });
+            return;
+          }
+
+          if (action === "shift") {
+            if (!scheduleId) {
+              throw new Error("タイマー設定 ID が不正です。");
+            }
+            await interaction.reply({
+              content: "ずらす時間を選んでください。",
+              components: buildTimerShiftSelect(threadId, scheduleId),
               ephemeral: true
             });
             return;
@@ -1559,6 +1631,41 @@ export function registerInteractionCreateListener(client: Client): void {
             throw new Error("未知の役割です。");
           }
           await interaction.showModal(buildHandoverModal(threadId, value));
+          return;
+        }
+
+        if (namespace === "timer" && action === "shift") {
+          const scheduleId = Number(parts[3] ?? 0);
+          if (!scheduleId) {
+            throw new Error("タイマー設定 ID が不正です。");
+          }
+          if (value === "custom") {
+            await interaction.showModal(buildTimerShiftCustomModal(threadId, scheduleId));
+            return;
+          }
+          const minutes = Number(value);
+          if (!Number.isInteger(minutes)) {
+            throw new Error("ずらす分数が不正です。");
+          }
+          await interaction.deferUpdate();
+          const member = await fetchGuildMember(interaction);
+          const service = new TimekeeperService(
+            interaction.client,
+            repos.timersRepo,
+            repos.eventsRepo,
+            repos.rolesRepo,
+            repos.seriesRepo,
+            repos.jobsRepo,
+            repos.settingsRepo
+          );
+          const schedule = await service.shift(member, threadId, scheduleId, minutes);
+          const event = repos.eventsRepo.get(threadId);
+          const sections = repos.timersRepo.listSections(schedule.id);
+          await interaction.editReply({
+            content: `${minutes > 0 ? "+" : ""}${minutes}分ずらしました。`,
+            embeds: event ? [buildTimerPanelEmbed(event, schedule, sections)] : [],
+            components: buildTimerPanelComponents(threadId, schedule)
+          });
           return;
         }
 
@@ -2074,7 +2181,39 @@ export function registerInteractionCreateListener(client: Client): void {
           const event = repos.eventsRepo.get(threadId);
           const sections = repos.timersRepo.listSections(schedule.id);
           await interaction.editReply({
-            content: "タイマーを設定しました。",
+            content: "タイマーを仕込みました。通知を飛ばす前に [この内容で確定] を押してください。",
+            embeds: event ? [buildTimerPanelEmbed(event, schedule, sections)] : [],
+            components: buildTimerPanelComponents(threadId, schedule)
+          });
+          return;
+        }
+
+        if (namespace === "timer" && action === "shift-submit") {
+          await interaction.deferReply({ ephemeral: true });
+          const scheduleId = Number(interaction.customId.split(":")[3] ?? 0);
+          if (!scheduleId) {
+            throw new Error("タイマー設定 ID が不正です。");
+          }
+          const minutes = Number(interaction.fields.getTextInputValue("minutes").trim());
+          if (!Number.isInteger(minutes)) {
+            throw new Error("ずらす分数は整数で入力してください。");
+          }
+          const member = await fetchGuildMember(interaction);
+          const repos = createRepos(getDb());
+          const service = new TimekeeperService(
+            interaction.client,
+            repos.timersRepo,
+            repos.eventsRepo,
+            repos.rolesRepo,
+            repos.seriesRepo,
+            repos.jobsRepo,
+            repos.settingsRepo
+          );
+          const schedule = await service.shift(member, threadId, scheduleId, minutes);
+          const event = repos.eventsRepo.get(threadId);
+          const sections = repos.timersRepo.listSections(schedule.id);
+          await interaction.editReply({
+            content: `${minutes > 0 ? "+" : ""}${minutes}分ずらしました。`,
             embeds: event ? [buildTimerPanelEmbed(event, schedule, sections)] : [],
             components: buildTimerPanelComponents(threadId, schedule)
           });

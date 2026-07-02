@@ -816,19 +816,120 @@ export function buildTimerPanelComponents(
     ];
   }
 
+  if (schedule.state === "idle") {
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`timer:arm:${threadId}:${schedule.id}`)
+          .setEmoji("🚀")
+          .setLabel("この内容で確定")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`timer:setup:${threadId}`)
+          .setEmoji("🔁")
+          .setLabel("再セットアップ")
+          .setStyle(ButtonStyle.Secondary)
+      )
+    ];
+  }
+
+  if (schedule.state === "armed") {
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`timer:next:${threadId}:${schedule.id}`)
+          .setEmoji("⏭️")
+          .setLabel("開始")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`timer:shift:${threadId}:${schedule.id}`)
+          .setEmoji("⏰")
+          .setLabel("時間をずらす")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`timer:edit:${threadId}:${schedule.id}`)
+          .setEmoji("✏️")
+          .setLabel("編集に戻す")
+          .setStyle(ButtonStyle.Secondary)
+      )
+    ];
+  }
+
+  if (schedule.state === "running") {
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`timer:next:${threadId}:${schedule.id}`)
+          .setEmoji("⏭️")
+          .setLabel("次へ")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`timer:finish:${threadId}:${schedule.id}`)
+          .setEmoji("✅")
+          .setLabel("終了")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`timer:shift:${threadId}:${schedule.id}`)
+          .setEmoji("⏰")
+          .setLabel("時間をずらす")
+          .setStyle(ButtonStyle.Secondary)
+      )
+    ];
+  }
+
   return [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`timer:next:${threadId}:${schedule.id}`)
-        .setEmoji("⏭️")
-        .setLabel(schedule.state === "idle" ? "開始" : "次へ")
-        .setStyle(ButtonStyle.Primary)
-        .setDisabled(schedule.state === "finished"),
       new ButtonBuilder()
         .setCustomId(`timer:setup:${threadId}`)
         .setEmoji("🔁")
         .setLabel("再セットアップ")
         .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildTimerSetupChoiceComponents(
+  threadId: string,
+  canCopyPrevious: boolean
+): ActionRowBuilder<ButtonBuilder>[] {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`timer:setup-new:${threadId}`)
+      .setEmoji("➕")
+      .setLabel("新規入力")
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  if (canCopyPrevious) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`timer:copy-previous:${threadId}`)
+        .setEmoji("📋")
+        .setLabel("前回をコピー")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+
+  return [row];
+}
+
+export function buildTimerShiftSelect(
+  threadId: string,
+  scheduleId: number
+): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`timer:shift:${threadId}:${scheduleId}`)
+        .setPlaceholder("ずらす時間を選択")
+        .addOptions(
+          { label: "+5分", value: "5" },
+          { label: "+10分", value: "10" },
+          { label: "+15分", value: "15" },
+          { label: "+30分", value: "30" },
+          { label: "-5分", value: "-5" },
+          { label: "カスタム", value: "custom" }
+        )
     )
   ];
 }

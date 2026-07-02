@@ -77,6 +77,28 @@ export class TimersRepo {
     ) ?? null;
   }
 
+  latestScheduleForPreviousSeriesEvent(
+    seriesId: number,
+    currentThreadId: string,
+    beforeAt: number
+  ): TimerScheduleRecord | null {
+    return (
+      this.db
+        .prepare(
+          `SELECT timer_schedules.*
+           FROM timer_schedules
+           INNER JOIN events ON events.thread_id = timer_schedules.thread_id
+           WHERE events.series_id = ?
+             AND events.thread_id <> ?
+             AND COALESCE(events.scheduled_at, events.created_at) < ?
+           ORDER BY COALESCE(events.scheduled_at, events.created_at) DESC,
+                    timer_schedules.created_at DESC
+           LIMIT 1`
+        )
+        .get(seriesId, currentThreadId, beforeAt) as TimerScheduleRecord | undefined
+    ) ?? null;
+  }
+
   listSections(scheduleId: number): TimerSectionRecord[] {
     return this.db
       .prepare("SELECT * FROM timer_sections WHERE schedule_id = ? ORDER BY ord ASC")
@@ -105,5 +127,12 @@ export class TimersRepo {
     this.db
       .prepare("UPDATE timer_sections SET actual_end = COALESCE(actual_end, ?) WHERE id = ?")
       .run(now, sectionId);
+  }
+
+  shiftPlannedStarts(scheduleId: number, deltaSeconds: number, onlyUnstarted: boolean): number {
+    const sql = onlyUnstarted
+      ? "UPDATE timer_sections SET planned_start = planned_start + ? WHERE schedule_id = ? AND actual_start IS NULL"
+      : "UPDATE timer_sections SET planned_start = planned_start + ? WHERE schedule_id = ?";
+    return this.db.prepare(sql).run(deltaSeconds, scheduleId).changes;
   }
 }

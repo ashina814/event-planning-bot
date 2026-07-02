@@ -306,7 +306,9 @@ export function buildAnnouncementPreviewEmbed(
 function timerStateLabel(schedule: TimerScheduleRecord): string {
   switch (schedule.state) {
     case "idle":
-      return "待機中";
+      return "仕込み済み (未確定)";
+    case "armed":
+      return "確定済み";
     case "running":
       return "進行中";
     case "finished":

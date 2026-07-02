@@ -161,7 +161,18 @@ export function buildAnnouncementCustomTimeModal(sessionId: string): ModalBuilde
     );
 }
 
-export function buildTimerSetupModal(threadId: string): ModalBuilder {
+export function buildTimerSetupModal(threadId: string, initialTimetable?: string): ModalBuilder {
+  const timetableInput = new TextInputBuilder()
+    .setCustomId("timetable")
+    .setLabel("タイムテーブル")
+    .setPlaceholder("22:00 集合\n22:05 告知\n22:15 自己紹介")
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true)
+    .setMaxLength(2000);
+  if (initialTimetable) {
+    timetableInput.setValue(initialTimetable.slice(0, 2000));
+  }
+
   return new ModalBuilder()
     .setCustomId(`timer:setup-submit:${threadId}`)
     .setTitle("タイマー セットアップ")
@@ -191,13 +202,23 @@ export function buildTimerSetupModal(threadId: string): ModalBuilder {
           .setRequired(false)
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
+        timetableInput
+      )
+    );
+}
+
+export function buildTimerShiftCustomModal(threadId: string, scheduleId: number): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`timer:shift-submit:${threadId}:${scheduleId}`)
+    .setTitle("タイマー 時間シフト")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
-          .setCustomId("timetable")
-          .setLabel("タイムテーブル")
-          .setPlaceholder("22:00 集合\n22:05 告知\n22:15 自己紹介")
-          .setStyle(TextInputStyle.Paragraph)
+          .setCustomId("minutes")
+          .setLabel("ずらす分数")
+          .setPlaceholder("例: 10 / -5")
+          .setStyle(TextInputStyle.Short)
           .setRequired(true)
-          .setMaxLength(2000)
       )
     );
 }
