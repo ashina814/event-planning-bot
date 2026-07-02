@@ -19,6 +19,7 @@ import type {
   TimerScheduleRecord,
   TimerSectionRecord
 } from "../../types/index.js";
+import { buildTimerNotificationComponents } from "../../ui/buttons.js";
 import { syncEventArtifacts } from "../event-lifecycle/sync.js";
 
 interface ParsedTimerLine {
@@ -32,6 +33,16 @@ interface TimerSetupInput {
   preNoticeMin: number;
   timetable: string;
 }
+
+interface TimerNoticeRef {
+  channelId: string;
+  messageId: string;
+  threadId: string;
+  scheduleId: number;
+  isLastSection: boolean;
+}
+
+const activeTimerNotices = new Map<number, TimerNoticeRef>();
 
 export class TimekeeperPermissionError extends Error {
   override name = "TimekeeperPermissionError";
@@ -141,6 +152,9 @@ export class TimekeeperService {
     this.assertCanOperate(member, roles);
 
     const schedule = this.requireSchedule(scheduleId);
+    if (schedule.thread_id !== threadId) {
+      throw new Error("指定されたタイマー設定がこのイベントのものではありません。");
+    }
     const sections = this.timersRepo.listSections(scheduleId);
     if (sections.length === 0) {
       throw new Error("タイマーセクションがありません。");
@@ -179,6 +193,35 @@ export class TimekeeperService {
     return `「${active.name}」を終了し、「${next.name}」を開始しました。`;
   }
 
+  async finish(member: GuildMember, threadId: string, scheduleId: number): Promise<string> {
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanOperate(member, roles);
+
+    const schedule = this.requireSchedule(scheduleId);
+    if (schedule.thread_id !== threadId) {
+      throw new Error("指定されたタイマー設定がこのイベントのものではありません。");
+    }
+
+    const sections = this.timersRepo.listSections(scheduleId);
+    const active = sections.find(
+      (section) => section.actual_start !== null && section.actual_end === null
+    );
+    if (!active) {
+      if (sections.length > 0 && sections.every((section) => section.actual_end !== null)) {
+        this.timersRepo.updateScheduleState(schedule.id, "finished");
+        await this.sync(threadId);
+        return "タイムキーパーは終了済みです。";
+      }
+      throw new Error("進行中のセクションがありません。[次へ] で開始してから終了してください。");
+    }
+
+    this.timersRepo.markSectionEnded(active.id, unixNow());
+    this.timersRepo.updateScheduleState(schedule.id, "finished");
+    await this.recordHistory(threadId, scheduleId);
+    await this.sync(threadId);
+    return `「${active.name}」を終了し、タイムキーパーを終了しました。`;
+  }
+
   async notifySection(
     scheduleId: number,
     sectionId: number,
@@ -208,7 +251,51 @@ export class TimekeeperService {
       throw new Error("タイマー通知先チャンネルが見つかりません。");
     }
 
-    await channel.send({ content });
+    if (mode === "prenotice") {
+      await channel.send({ content });
+      return;
+    }
+
+    await this.disableActiveNotice(schedule.id);
+    const sections = this.timersRepo.listSections(schedule.id);
+    const isLastSection = sections.every((item) => item.ord <= section.ord);
+    const sent = await channel.send({
+      content,
+      components: buildTimerNotificationComponents(schedule.thread_id, schedule.id, isLastSection)
+    });
+    activeTimerNotices.set(schedule.id, {
+      channelId: sent.channelId,
+      messageId: sent.id,
+      threadId: schedule.thread_id,
+      scheduleId: schedule.id,
+      isLastSection
+    });
+  }
+
+  private async disableActiveNotice(scheduleId: number): Promise<void> {
+    const notice = activeTimerNotices.get(scheduleId);
+    if (!notice) {
+      return;
+    }
+
+    activeTimerNotices.delete(scheduleId);
+    try {
+      const channel = await this.client.channels.fetch(notice.channelId);
+      if (!channel || !("messages" in channel)) {
+        return;
+      }
+      const message = await channel.messages.fetch(notice.messageId);
+      await message.edit({
+        components: buildTimerNotificationComponents(
+          notice.threadId,
+          notice.scheduleId,
+          notice.isLastSection,
+          true
+        )
+      });
+    } catch {
+      // Notification messages are best-effort; missing/deleted messages should not stop timers.
+    }
   }
 
   private async recordHistory(threadId: string, scheduleId: number): Promise<void> {

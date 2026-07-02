@@ -24,6 +24,7 @@ const scheduler = new SchedulerRunner(
   repos.timersRepo,
   repos.todosRepo,
   repos.expensesRepo,
+  repos.participantsRepo,
   repos.settingsRepo
 );
 

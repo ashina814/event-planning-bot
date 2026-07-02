@@ -36,9 +36,11 @@ interface SetupInput {
 }
 
 interface ReactionSetupSession {
+  purpose: "config" | "announcement";
   threadId: string;
-  targetChannel: string;
-  targetMsg: string;
+  targetChannel: string | null;
+  targetMsg: string | null;
+  announcementSessionId: string | null;
   setupChannel: string;
   setupMsg: string;
   userId: string;
@@ -102,9 +104,56 @@ export class ParticipantsService {
     });
 
     reactionSetupSessions.set(setupMessage.id, {
+      purpose: "config",
       threadId,
       targetChannel,
       targetMsg,
+      announcementSessionId: null,
+      setupChannel: setupMessage.channelId,
+      setupMsg: setupMessage.id,
+      userId: member.id,
+      emojis: []
+    });
+
+    return setupMessage;
+  }
+
+  async beginAnnouncementEmojiSetup(
+    member: GuildMember,
+    threadId: string,
+    announcementSessionId: string
+  ): Promise<Message> {
+    this.requireEvent(threadId);
+    const roles = this.rolesRepo.list(threadId);
+    this.assertCanConfigure(member, roles);
+
+    const channel = await this.client.channels.fetch(threadId);
+    if (!channel || !("send" in channel)) {
+      throw new Error("イベントスレッドにセットアップメッセージを投稿できませんでした。");
+    }
+
+    const setupMessage = await channel.send({
+      content: [
+        "👤 **告知の参加者カウント用絵文字セットアップ**",
+        "",
+        "このメッセージに、リアクションで絵文字を 2 つ押してください。",
+        "",
+        "1. 「参加」用の絵文字を先に",
+        "2. 「不参加」用の絵文字を後に",
+        "",
+        "押し終わったら [これで確定] を押してください。"
+      ].join("\n")
+    });
+    await setupMessage.edit({
+      components: this.buildAnnouncementEmojiSetupComponents(announcementSessionId, threadId, setupMessage.id)
+    });
+
+    reactionSetupSessions.set(setupMessage.id, {
+      purpose: "announcement",
+      threadId,
+      targetChannel: null,
+      targetMsg: null,
+      announcementSessionId,
       setupChannel: setupMessage.channelId,
       setupMsg: setupMessage.id,
       userId: member.id,
@@ -129,12 +178,12 @@ export class ParticipantsService {
     if (session.emojis.length !== 2) {
       throw new Error("参加用と不参加用の絵文字を2つ押してから確定してください。");
     }
+    if (session.purpose !== "config" || !session.targetChannel || !session.targetMsg) {
+      throw new Error("参加者カウントのセットアップ種別が一致しません。");
+    }
 
     const event = this.requireEvent(threadId);
-    const emojis = session.emojis.map((emoji, index) => ({
-      emoji,
-      label: participantsLabels[index] ?? participantsLabels[0]
-    }));
+    const emojis = this.sessionEmojisAsConfigs(session);
 
     this.participantsRepo.upsertConfig({
       threadId,
@@ -151,9 +200,43 @@ export class ParticipantsService {
     await this.deleteSetupMessage(session);
   }
 
+  async confirmAnnouncementEmojiSetup(
+    member: GuildMember,
+    threadId: string,
+    setupMsg: string
+  ): Promise<ReactionEmojiConfig[]> {
+    const session = reactionSetupSessions.get(setupMsg);
+    if (!session || session.threadId !== threadId || session.purpose !== "announcement") {
+      throw new Error("告知用の絵文字セットアップが見つかりませんでした。もう一度やり直してください。");
+    }
+    if (session.userId !== member.id) {
+      throw new ParticipantsPermissionError("セットアップを開始した本人だけが確定できます。");
+    }
+    if (session.emojis.length !== 2) {
+      throw new Error("参加用と不参加用の絵文字を2つ押してから確定してください。");
+    }
+
+    const emojis = this.sessionEmojisAsConfigs(session);
+    reactionSetupSessions.delete(setupMsg);
+    await this.deleteSetupMessage(session);
+    return emojis;
+  }
+
   async cancelReactionEmojiSetup(member: GuildMember, threadId: string, setupMsg: string): Promise<void> {
     const session = reactionSetupSessions.get(setupMsg);
     if (!session || session.threadId !== threadId) {
+      return;
+    }
+    if (session.userId !== member.id) {
+      throw new ParticipantsPermissionError("セットアップを開始した本人だけがキャンセルできます。");
+    }
+    reactionSetupSessions.delete(setupMsg);
+    await this.deleteSetupMessage(session);
+  }
+
+  async cancelAnnouncementEmojiSetup(member: GuildMember, threadId: string, setupMsg: string): Promise<void> {
+    const session = reactionSetupSessions.get(setupMsg);
+    if (!session || session.threadId !== threadId || session.purpose !== "announcement") {
       return;
     }
     if (session.userId !== member.id) {
@@ -235,6 +318,44 @@ export class ParticipantsService {
       postTargetChannel: null,
       postTargetThread: null,
       deadlineAt
+    });
+    await this.seedReactionCounts(threadId, targetChannel, targetMsg, emojis);
+  }
+
+  getConfiguredReactionEmojis(threadId: string): ReactionEmojiConfig[] | null {
+    const config = this.participantsRepo.getConfig(threadId);
+    if (!config?.reaction_emojis) {
+      return null;
+    }
+
+    try {
+      const emojis = this.parseStoredEmojis(config);
+      return emojis.length === 2 ? emojis : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async configureReactionModeFromMessage(
+    threadId: string,
+    targetChannel: string,
+    targetMsg: string,
+    emojis: ReactionEmojiConfig[]
+  ): Promise<void> {
+    if (emojis.length !== 2) {
+      throw new Error("参加者カウントに使う絵文字を2つ設定してください。");
+    }
+
+    const event = this.requireEvent(threadId);
+    this.participantsRepo.upsertConfig({
+      threadId,
+      mode: "reaction",
+      reactionTargetChannel: targetChannel,
+      reactionTargetMsg: targetMsg,
+      reactionEmojis: emojis,
+      postTargetChannel: null,
+      postTargetThread: null,
+      deadlineAt: event.scheduled_at
     });
     await this.seedReactionCounts(threadId, targetChannel, targetMsg, emojis);
   }
@@ -352,6 +473,32 @@ export class ParticipantsService {
           .setStyle(ButtonStyle.Secondary)
       )
     ];
+  }
+
+  private buildAnnouncementEmojiSetupComponents(
+    announcementSessionId: string,
+    threadId: string,
+    setupMsg: string
+  ): ActionRowBuilder<ButtonBuilder>[] {
+    return [
+      new DiscordActionRowBuilder<DiscordButtonBuilder>().addComponents(
+        new DiscordButtonBuilder()
+          .setCustomId(`ann:emoji-confirm:${announcementSessionId}:${threadId}:${setupMsg}`)
+          .setLabel("これで確定")
+          .setStyle(ButtonStyle.Primary),
+        new DiscordButtonBuilder()
+          .setCustomId(`ann:emoji-cancel:${announcementSessionId}:${threadId}:${setupMsg}`)
+          .setLabel("キャンセル")
+          .setStyle(ButtonStyle.Secondary)
+      )
+    ];
+  }
+
+  private sessionEmojisAsConfigs(session: ReactionSetupSession): ReactionEmojiConfig[] {
+    return session.emojis.map((emoji, index) => ({
+      emoji,
+      label: participantsLabels[index] ?? participantsLabels[0]
+    }));
   }
 
   private async deleteSetupMessage(session: ReactionSetupSession): Promise<void> {

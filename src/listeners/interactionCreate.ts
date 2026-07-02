@@ -1,4 +1,4 @@
-import { Events, type Client, type Interaction } from "discord.js";
+import { Events, type Client, type GuildMember, type Interaction } from "discord.js";
 import { commandMap } from "../commands/index.js";
 import {
   announcementMessageLink,
@@ -48,12 +48,14 @@ import {
   type EventStatus,
   type ExpenseCategory,
   type ExpenseDirection,
+  type ReactionEmojiConfig,
   type RoleSlot,
   type RoleType,
   type SettingKey
 } from "../types/index.js";
 import {
   buildAnnouncementPanelComponents,
+  buildAnnouncementParticipantsConfirmComponents,
   buildAnnouncementSchedulePresetComponents,
   buildAnnouncementTargetChannelSelect,
   buildAdminPanelComponents,
@@ -76,6 +78,7 @@ import {
   buildRoleUserSelect,
   buildStatusSelect,
   buildTimerPanelComponents,
+  buildTimerNotificationComponents,
   buildTodoActions,
   buildTodoPanelComponents
 } from "../ui/buttons.js";
@@ -183,6 +186,94 @@ function requireRoleBulkSession(userId: string, threadId: string): RoleBulkSessi
 function roleBulkContent(session: RoleBulkSession): string {
   const maxPage = Math.max(0, Math.ceil(session.roles.length / 4) - 1);
   return `担当をまとめて設定します。${maxPage > 0 ? `ページ ${session.page + 1}/${maxPage + 1}` : ""}`;
+}
+
+interface AnnouncementScheduleSession {
+  userId: string;
+  scheduledAt: number;
+  createdAt: number;
+}
+
+const announcementScheduleSessions = new Map<string, AnnouncementScheduleSession>();
+const ANNOUNCEMENT_SCHEDULE_SESSION_TTL_MS = 30 * 60 * 1000;
+
+function cleanupAnnouncementScheduleSessions(): void {
+  const expiresBefore = Date.now() - ANNOUNCEMENT_SCHEDULE_SESSION_TTL_MS;
+  for (const [key, session] of announcementScheduleSessions.entries()) {
+    if (session.createdAt < expiresBefore) {
+      announcementScheduleSessions.delete(key);
+    }
+  }
+}
+
+function setAnnouncementScheduledAt(sessionId: string, userId: string, scheduledAt: number): void {
+  cleanupAnnouncementScheduleSessions();
+  announcementScheduleSessions.set(sessionId, {
+    userId,
+    scheduledAt,
+    createdAt: Date.now()
+  });
+}
+
+function requireAnnouncementScheduledAt(sessionId: string, userId: string): number {
+  cleanupAnnouncementScheduleSessions();
+  const session = announcementScheduleSessions.get(sessionId);
+  if (!session) {
+    throw new Error("予約日時の選択が見つかりません。もう一度右クリックからやり直してください。");
+  }
+  if (session.userId !== userId) {
+    throw new Error("この予約操作は開始した本人のみ続行できます。");
+  }
+  return session.scheduledAt;
+}
+
+async function scheduleAnnouncementDraft(
+  sessionId: string,
+  userId: string,
+  member: GuildMember,
+  service: AnnouncementService,
+  enableParticipants: boolean,
+  participantsEmojis: ReactionEmojiConfig[] | null
+): Promise<AnnouncementRecord> {
+  const session = requireAnnouncementDraftSession(sessionId, userId);
+  if (!session.threadId || !session.targetChannelId) {
+    throw new Error("予約するイベントまたは投稿先チャンネルが未選択です。");
+  }
+  const scheduledAt = requireAnnouncementScheduledAt(sessionId, userId);
+  const announcement = await service.scheduleFromMessage(member, {
+    threadId: session.threadId,
+    sourceChannelId: session.sourceChannelId,
+    sourceMessageId: session.sourceMessageId,
+    sourceAuthorId: session.sourceAuthorId,
+    targetChannelId: session.targetChannelId,
+    body: session.body,
+    scheduledAt,
+    enableParticipants,
+    participantsEmojis
+  });
+  discardAnnouncementDraftSession(sessionId);
+  announcementScheduleSessions.delete(sessionId);
+  return announcement;
+}
+
+function buildAnnouncementParticipantsPrompt(targetChannelId: string, scheduledAt: number): string {
+  return [
+    `投稿先: <#${targetChannelId}>`,
+    `投稿日時: ${formatJstDateTime(scheduledAt)}`,
+    "",
+    "この告知を参加者カウントの対象にしますか？"
+  ].join("\n");
+}
+
+function buildAnnouncementReservedContent(
+  announcement: AnnouncementRecord,
+  scheduledAt: number,
+  participantsEnabled: boolean
+): string {
+  return [
+    `予約完了。${formatJstDateTime(announcement.scheduled_at ?? scheduledAt)} に <#${announcement.target_channel_id}> へ投稿します。`,
+    participantsEnabled ? "投稿後に参加者カウントを開始します。" : null
+  ].filter(Boolean).join("\n");
 }
 
 function assertOwner(userId: string): void {
@@ -677,9 +768,23 @@ export function registerInteractionCreateListener(client: Client): void {
               throw new Error("予約するイベントまたは投稿先チャンネルが未選択です。");
             }
             const scheduledAt = announcementPresetUnix(preset ?? "");
+            setAnnouncementScheduledAt(threadId, interaction.user.id, scheduledAt);
+            await interaction.update({
+              content: buildAnnouncementParticipantsPrompt(session.targetChannelId, scheduledAt),
+              components: buildAnnouncementParticipantsConfirmComponents(threadId)
+            });
+            return;
+          }
+
+          if (action === "participants") {
+            const decision = parts[3];
+            if (decision !== "yes" && decision !== "no") {
+              throw new Error("未知の告知予約オプションです。");
+            }
+
             await interaction.deferUpdate();
             const member = await fetchGuildMember(interaction);
-            const service = new AnnouncementService(
+            const announcementService = new AnnouncementService(
               interaction.client,
               repos.announcementsRepo,
               repos.eventsRepo,
@@ -687,20 +792,131 @@ export function registerInteractionCreateListener(client: Client): void {
               repos.jobsRepo,
               repos.settingsRepo
             );
-            const announcement = await service.scheduleFromMessage(member, {
-              threadId: session.threadId,
-              sourceChannelId: session.sourceChannelId,
-              sourceMessageId: session.sourceMessageId,
-              sourceAuthorId: session.sourceAuthorId,
-              targetChannelId: session.targetChannelId,
-              body: session.body,
-              scheduledAt
-            });
-            discardAnnouncementDraftSession(threadId);
+
+            if (decision === "no") {
+              const scheduledAt = requireAnnouncementScheduledAt(threadId, interaction.user.id);
+              const announcement = await scheduleAnnouncementDraft(
+                threadId,
+                interaction.user.id,
+                member,
+                announcementService,
+                false,
+                null
+              );
+              await interaction.editReply({
+                content: buildAnnouncementReservedContent(announcement, scheduledAt, false),
+                components: []
+              });
+              return;
+            }
+
+            const session = requireAnnouncementDraftSession(threadId, interaction.user.id);
+            if (!session.threadId) {
+              throw new Error("予約するイベントが未選択です。");
+            }
+            const participantsService = new ParticipantsService(
+              interaction.client,
+              repos.participantsRepo,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.settingsRepo
+            );
+            const configuredEmojis = participantsService.getConfiguredReactionEmojis(session.threadId);
+            if (configuredEmojis) {
+              const scheduledAt = requireAnnouncementScheduledAt(threadId, interaction.user.id);
+              const announcement = await scheduleAnnouncementDraft(
+                threadId,
+                interaction.user.id,
+                member,
+                announcementService,
+                true,
+                configuredEmojis
+              );
+              await interaction.editReply({
+                content: [
+                  buildAnnouncementReservedContent(announcement, scheduledAt, true),
+                  "既存の参加者カウント絵文字を使います。"
+                ].join("\n"),
+                components: []
+              });
+              return;
+            }
+
+            const setupMessage = await participantsService.beginAnnouncementEmojiSetup(
+              member,
+              session.threadId,
+              threadId
+            );
             await interaction.editReply({
-              content: `予約完了。${formatJstDateTime(announcement.scheduled_at ?? scheduledAt)} に <#${announcement.target_channel_id}> へ投稿します。`,
+              content: [
+                `絵文字セットアップメッセージを投稿しました: ${setupMessage.url}`,
+                "参加用・不参加用の絵文字を押して、セットアップメッセージの [これで確定] を押してください。"
+              ].join("\n"),
               components: []
             });
+            return;
+          }
+
+          if (action === "emoji-confirm") {
+            const sessionId = threadId;
+            const setupThreadId = parts[3];
+            const setupMsg = parts[4];
+            if (!setupThreadId || !setupMsg) {
+              throw new Error("絵文字セットアップ情報が不完全です。");
+            }
+            await interaction.deferReply({ ephemeral: true });
+            const member = await fetchGuildMember(interaction);
+            const participantsService = new ParticipantsService(
+              interaction.client,
+              repos.participantsRepo,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.settingsRepo
+            );
+            const emojis = await participantsService.confirmAnnouncementEmojiSetup(member, setupThreadId, setupMsg);
+            const announcementService = new AnnouncementService(
+              interaction.client,
+              repos.announcementsRepo,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.jobsRepo,
+              repos.settingsRepo
+            );
+            const scheduledAt = requireAnnouncementScheduledAt(sessionId, interaction.user.id);
+            const announcement = await scheduleAnnouncementDraft(
+              sessionId,
+              interaction.user.id,
+              member,
+              announcementService,
+              true,
+              emojis
+            );
+            await interaction.editReply({
+              content: buildAnnouncementReservedContent(announcement, scheduledAt, true)
+            });
+            return;
+          }
+
+          if (action === "emoji-cancel") {
+            const sessionId = threadId;
+            const setupThreadId = parts[3];
+            const setupMsg = parts[4];
+            if (!setupThreadId || !setupMsg) {
+              return;
+            }
+            await interaction.deferReply({ ephemeral: true });
+            const member = await fetchGuildMember(interaction);
+            const participantsService = new ParticipantsService(
+              interaction.client,
+              repos.participantsRepo,
+              repos.eventsRepo,
+              repos.rolesRepo,
+              repos.settingsRepo
+            );
+            await participantsService.cancelAnnouncementEmojiSetup(member, setupThreadId, setupMsg);
+            discardAnnouncementDraftSession(sessionId);
+            announcementScheduleSessions.delete(sessionId);
+            await interaction.editReply({ content: "告知予約をキャンセルしました。" });
             return;
           }
         }
@@ -722,13 +938,52 @@ export function registerInteractionCreateListener(client: Client): void {
             return;
           }
 
+          if (action === "panel") {
+            const event = repos.eventsRepo.get(threadId);
+            const timer = repos.timersRepo.latestSchedule(threadId);
+            const sections = timer ? repos.timersRepo.listSections(timer.id) : [];
+            await interaction.reply({
+              embeds: event ? [buildTimerPanelEmbed(event, timer, sections)] : [],
+              components: buildTimerPanelComponents(threadId, timer),
+              ephemeral: true
+            });
+            return;
+          }
+
           if (action === "next") {
             if (!scheduleId) {
               throw new Error("タイマー設定 ID が不正です。");
             }
             await interaction.deferReply({ ephemeral: true });
+            if (parts[4] === "notice") {
+              await interaction.message.edit({
+                components: buildTimerNotificationComponents(threadId, scheduleId, false, true)
+              }).catch(() => null);
+            }
             const member = await fetchGuildMember(interaction);
             const message = await service.next(member, threadId, scheduleId);
+            const event = repos.eventsRepo.get(threadId);
+            const timer = repos.timersRepo.getSchedule(scheduleId);
+            const sections = repos.timersRepo.listSections(scheduleId);
+            await interaction.editReply({
+              content: message,
+              embeds: event && timer ? [buildTimerPanelEmbed(event, timer, sections)] : []
+            });
+            return;
+          }
+
+          if (action === "finish") {
+            if (!scheduleId) {
+              throw new Error("タイマー設定 ID が不正です。");
+            }
+            await interaction.deferReply({ ephemeral: true });
+            if (parts[4] === "notice") {
+              await interaction.message.edit({
+                components: buildTimerNotificationComponents(threadId, scheduleId, true, true)
+              }).catch(() => null);
+            }
+            const member = await fetchGuildMember(interaction);
+            const message = await service.finish(member, threadId, scheduleId);
             const event = repos.eventsRepo.get(threadId);
             const timer = repos.timersRepo.getSchedule(scheduleId);
             const sections = repos.timersRepo.listSections(scheduleId);
@@ -1378,29 +1633,11 @@ export function registerInteractionCreateListener(client: Client): void {
             throw new Error("予約するイベントまたは投稿先チャンネルが未選択です。");
           }
           const scheduledAt = interaction.fields.getTextInputValue("scheduled_at");
-          const member = await fetchGuildMember(interaction);
-          const repos = createRepos(getDb());
-          const service = new AnnouncementService(
-            interaction.client,
-            repos.announcementsRepo,
-            repos.eventsRepo,
-            repos.rolesRepo,
-            repos.jobsRepo,
-            repos.settingsRepo
-          );
           const scheduledUnix = jstDateTimeToUnix(scheduledAt);
-          const announcement = await service.scheduleFromMessage(member, {
-            threadId: session.threadId,
-            sourceChannelId: session.sourceChannelId,
-            sourceMessageId: session.sourceMessageId,
-            sourceAuthorId: session.sourceAuthorId,
-            targetChannelId: session.targetChannelId,
-            body: session.body,
-            scheduledAt: scheduledUnix
-          });
-          discardAnnouncementDraftSession(threadId);
+          setAnnouncementScheduledAt(threadId, interaction.user.id, scheduledUnix);
           await interaction.editReply({
-            content: `予約完了。${formatJstDateTime(announcement.scheduled_at ?? scheduledUnix)} に <#${announcement.target_channel_id}> へ投稿します。`
+            content: buildAnnouncementParticipantsPrompt(session.targetChannelId, scheduledUnix),
+            components: buildAnnouncementParticipantsConfirmComponents(threadId)
           });
           return;
         }

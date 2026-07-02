@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { AnnouncementRecord } from "../../types/index.js";
+import type { AnnouncementRecord, ReactionEmojiConfig } from "../../types/index.js";
 
 interface CreateAnnouncementInput {
   threadId: string;
@@ -8,6 +8,8 @@ interface CreateAnnouncementInput {
   sourceMessageId?: string | null;
   targetChannelId?: string | null;
   scheduledAt?: number | null;
+  enableParticipants?: boolean;
+  participantsEmojis?: ReactionEmojiConfig[] | null;
   createdBy: string;
   now: number;
 }
@@ -20,8 +22,9 @@ export class AnnouncementsRepo {
       .prepare(
         `INSERT INTO announcements (
           thread_id, body, source_channel_id, source_message_id, target_channel_id,
-          created_by, created_at, posted_msg_id, posted_at, scheduled_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+          created_by, created_at, posted_msg_id, posted_at, scheduled_at,
+          enable_participants, participants_emojis
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`
       )
       .run(
         input.threadId,
@@ -31,7 +34,9 @@ export class AnnouncementsRepo {
         input.targetChannelId ?? null,
         input.createdBy,
         input.now,
-        input.scheduledAt ?? null
+        input.scheduledAt ?? null,
+        input.enableParticipants ? 1 : 0,
+        input.participantsEmojis ? JSON.stringify(input.participantsEmojis) : null
       );
 
     return Number(result.lastInsertRowid);

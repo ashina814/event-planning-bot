@@ -6,7 +6,12 @@ import type { RolesRepo } from "../../db/repos/roles.js";
 import type { SettingsRepo } from "../../db/repos/settings.js";
 import { isEventLead } from "../../lib/permission.js";
 import { unixNow } from "../../lib/time.js";
-import type { AnnouncementRecord, EventRecord, EventRoleRecord } from "../../types/index.js";
+import type {
+  AnnouncementRecord,
+  EventRecord,
+  EventRoleRecord,
+  ReactionEmojiConfig
+} from "../../types/index.js";
 
 export class AnnouncementPermissionError extends Error {
   override name = "AnnouncementPermissionError";
@@ -20,6 +25,8 @@ interface ScheduleFromMessageInput {
   targetChannelId: string;
   body: string;
   scheduledAt: number;
+  enableParticipants?: boolean;
+  participantsEmojis?: ReactionEmojiConfig[] | null;
 }
 
 export class AnnouncementService {
@@ -54,6 +61,9 @@ export class AnnouncementService {
     if (input.scheduledAt <= now) {
       throw new Error("予約日時は現在より後にしてください。");
     }
+    if (input.enableParticipants && (input.participantsEmojis?.length ?? 0) !== 2) {
+      throw new Error("参加者カウントに使う絵文字を2つ設定してください。");
+    }
 
     const id = this.announcementsRepo.create({
       threadId: input.threadId,
@@ -62,6 +72,8 @@ export class AnnouncementService {
       sourceMessageId: input.sourceMessageId,
       targetChannelId: input.targetChannelId,
       scheduledAt: input.scheduledAt,
+      enableParticipants: input.enableParticipants ?? false,
+      participantsEmojis: input.enableParticipants ? input.participantsEmojis ?? null : null,
       createdBy: member.id,
       now
     });

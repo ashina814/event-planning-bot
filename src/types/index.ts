@@ -157,6 +157,8 @@ export interface AnnouncementRecord {
   posted_msg_id: string | null;
   posted_at: number | null;
   scheduled_at: number | null;
+  enable_participants: number;
+  participants_emojis: string | null;
 }
 
 export type ParticipantsMode = "reaction" | "post";

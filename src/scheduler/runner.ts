@@ -3,6 +3,7 @@ import type { AnnouncementsRepo } from "../db/repos/announcements.js";
 import type { EventsRepo } from "../db/repos/events.js";
 import type { ExpensesRepo } from "../db/repos/expenses.js";
 import type { JobsRepo } from "../db/repos/jobs.js";
+import type { ParticipantsRepo } from "../db/repos/participants.js";
 import type { RolesRepo } from "../db/repos/roles.js";
 import type { SeriesRepo } from "../db/repos/series.js";
 import type { SettingsRepo } from "../db/repos/settings.js";
@@ -26,6 +27,7 @@ export class SchedulerRunner {
     private readonly timersRepo: TimersRepo,
     private readonly todosRepo: TodosRepo,
     private readonly expensesRepo: ExpensesRepo,
+    private readonly participantsRepo: ParticipantsRepo,
     private readonly settingsRepo: SettingsRepo
   ) {}
 
@@ -68,6 +70,7 @@ export class SchedulerRunner {
             timersRepo: this.timersRepo,
             todosRepo: this.todosRepo,
             expensesRepo: this.expensesRepo,
+            participantsRepo: this.participantsRepo,
             settingsRepo: this.settingsRepo,
             jobsRepo: this.jobsRepo
           });

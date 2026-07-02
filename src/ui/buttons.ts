@@ -459,6 +459,21 @@ export function buildAnnouncementSchedulePresetComponents(sessionId: string): Ac
   ];
 }
 
+export function buildAnnouncementParticipantsConfirmComponents(sessionId: string): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`ann:participants:${sessionId}:yes`)
+        .setLabel("はい、対象にする")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`ann:participants:${sessionId}:no`)
+        .setLabel("いいえ")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
 export function buildTimerPanelComponents(
   threadId: string,
   schedule: TimerScheduleRecord | null
@@ -488,6 +503,37 @@ export function buildTimerPanelComponents(
         .setEmoji("🔁")
         .setLabel("再セットアップ")
         .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildTimerNotificationComponents(
+  threadId: string,
+  scheduleId: number,
+  isLastSection: boolean,
+  disabled = false
+): ActionRowBuilder<ButtonBuilder>[] {
+  const actionButton = isLastSection
+    ? new ButtonBuilder()
+        .setCustomId(`timer:finish:${threadId}:${scheduleId}:notice`)
+        .setEmoji("✅")
+        .setLabel("タイムキーパー終了")
+        .setStyle(ButtonStyle.Success)
+    : new ButtonBuilder()
+        .setCustomId(`timer:next:${threadId}:${scheduleId}:notice`)
+        .setEmoji("▶️")
+        .setLabel("次のセクションへ")
+        .setStyle(ButtonStyle.Primary);
+
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      actionButton.setDisabled(disabled),
+      new ButtonBuilder()
+        .setCustomId(`timer:panel:${threadId}:${scheduleId}:notice`)
+        .setEmoji("⏸")
+        .setLabel("タイマー確認")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(disabled)
     )
   ];
 }

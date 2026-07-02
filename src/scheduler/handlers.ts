@@ -3,6 +3,7 @@ import type { AnnouncementsRepo } from "../db/repos/announcements.js";
 import type { EventsRepo } from "../db/repos/events.js";
 import type { ExpensesRepo } from "../db/repos/expenses.js";
 import type { JobsRepo } from "../db/repos/jobs.js";
+import type { ParticipantsRepo } from "../db/repos/participants.js";
 import type { RolesRepo } from "../db/repos/roles.js";
 import type { SeriesRepo } from "../db/repos/series.js";
 import type { SettingsRepo } from "../db/repos/settings.js";
@@ -11,10 +12,12 @@ import type { TodosRepo } from "../db/repos/todos.js";
 import { logger } from "../lib/logger.js";
 import { AnnouncementService } from "../features/announcement/service.js";
 import { EventLifecycleService } from "../features/event-lifecycle/service.js";
+import { syncEventArtifacts } from "../features/event-lifecycle/sync.js";
 import { ExpenseService } from "../features/expense/service.js";
+import { ParticipantsService } from "../features/participants/service.js";
 import { TimekeeperService } from "../features/timekeeper/service.js";
 import { TodoService } from "../features/todo/service.js";
-import type { ScheduledJobRecord } from "../types/index.js";
+import type { AnnouncementRecord, ReactionEmojiConfig, ScheduledJobRecord } from "../types/index.js";
 
 interface SchedulerDeps {
   client: Client;
@@ -25,6 +28,7 @@ interface SchedulerDeps {
   timersRepo: TimersRepo;
   todosRepo: TodosRepo;
   expensesRepo: ExpensesRepo;
+  participantsRepo: ParticipantsRepo;
   settingsRepo: SettingsRepo;
   jobsRepo: JobsRepo;
 }
@@ -85,7 +89,8 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
         deps.jobsRepo,
         deps.settingsRepo
       );
-      await service.postFromJob(announcementId, scheduledAt, channelId);
+      const announcement = await service.postFromJob(announcementId, scheduledAt, channelId);
+      await startAnnouncementParticipantsIfEnabled(announcement, channelId, deps);
       return;
     }
     case "timer_section_prenotice":
@@ -166,5 +171,73 @@ export async function handleScheduledJob(job: ScheduledJobRecord, deps: Schedule
     default:
       logger.warn({ job }, "scheduled job kind has no handler yet");
       throw new Error(`handler not implemented: ${job.kind}`);
+  }
+}
+
+async function startAnnouncementParticipantsIfEnabled(
+  announcement: AnnouncementRecord,
+  fallbackChannelId: string | null,
+  deps: SchedulerDeps
+): Promise<void> {
+  if (announcement.enable_participants !== 1 || !announcement.posted_msg_id) {
+    return;
+  }
+
+  const emojis = parseAnnouncementEmojis(announcement);
+  if (emojis.length !== 2) {
+    logger.warn({ announcementId: announcement.id }, "announcement participants enabled without emojis");
+    return;
+  }
+
+  const targetChannelId =
+    announcement.target_channel_id ??
+    fallbackChannelId ??
+    deps.settingsRepo.require("eventAnnounce", "公式告知チャンネル");
+  const targetChannel = await deps.client.channels.fetch(targetChannelId);
+  if (!targetChannel || !("messages" in targetChannel)) {
+    throw new Error("告知投稿先チャンネルを取得できません。");
+  }
+
+  const message = await targetChannel.messages.fetch(announcement.posted_msg_id);
+  for (const config of emojis) {
+    await message.react(config.emoji);
+  }
+
+  const participantsService = new ParticipantsService(
+    deps.client,
+    deps.participantsRepo,
+    deps.eventsRepo,
+    deps.rolesRepo,
+    deps.settingsRepo
+  );
+  await participantsService.configureReactionModeFromMessage(
+    announcement.thread_id,
+    targetChannelId,
+    announcement.posted_msg_id,
+    emojis
+  );
+  await syncEventArtifacts(
+    deps.client,
+    deps.eventsRepo,
+    deps.rolesRepo,
+    deps.seriesRepo,
+    announcement.thread_id
+  );
+
+  const thread = await deps.client.channels.fetch(announcement.thread_id).catch(() => null);
+  if (thread && "send" in thread) {
+    await thread.send("告知を投稿しました。参加者カウントを開始します。");
+  }
+}
+
+function parseAnnouncementEmojis(announcement: AnnouncementRecord): ReactionEmojiConfig[] {
+  if (!announcement.participants_emojis) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(announcement.participants_emojis) as ReactionEmojiConfig[];
+    return Array.isArray(parsed) ? parsed.slice(0, 2) : [];
+  } catch {
+    return [];
   }
 }

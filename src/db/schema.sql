@@ -85,7 +85,9 @@ CREATE TABLE IF NOT EXISTS announcements (
   created_at      INTEGER NOT NULL,
   posted_msg_id   TEXT,
   posted_at       INTEGER,
-  scheduled_at    INTEGER
+  scheduled_at    INTEGER,
+  enable_participants INTEGER NOT NULL DEFAULT 0,
+  participants_emojis TEXT
 );
 
 CREATE TABLE IF NOT EXISTS timer_schedules (
