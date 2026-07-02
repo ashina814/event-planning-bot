@@ -37,10 +37,13 @@ import {
   helpTopics,
   type HelpTopic
 } from "../features/help/index.js";
+import { buildEvaluationMaterialEmbed } from "../features/evaluation/embeds.js";
+import { EvaluationService } from "../features/evaluation/service.js";
 import { OverviewService } from "../features/overview/service.js";
 import { ParticipantsService } from "../features/participants/service.js";
 import { buildPayrollItemEmbed, buildPayrollRunEmbed } from "../features/payroll/embeds.js";
 import { PayrollService } from "../features/payroll/service.js";
+import { SpecialBonusService, type SpecialBonusRecord } from "../features/bonus/service.js";
 import { RewardsService, type RewardSettingsSummary } from "../features/rewards/service.js";
 import { EventRolesService } from "../features/roles/service.js";
 import { TodoService } from "../features/todo/service.js";
@@ -105,7 +108,12 @@ import {
   buildRoleTypeSelect,
   buildRoleUserSelect,
   buildPayrollItemComponents,
+  buildPayrollEvaluationComponents,
   buildPayrollRunComponents,
+  buildSpecialBonusDecisionComponents,
+  buildSpecialBonusEventSelect,
+  buildSpecialBonusPanelComponents,
+  buildSpecialBonusUserSelect,
   buildRewardGradeChoiceSelect,
   buildRewardGradeSelect,
   buildRewardRoleSelect,
@@ -149,10 +157,13 @@ import {
   buildContributionNoteModal,
   buildHandoverModal,
   buildMinutesTodoAdoptModal,
+  buildPayrollEvalCustomModal,
   buildRewardGradeModal,
   buildRewardRoleRateModal,
   buildRewardScaleMultiplierModal,
   buildRoleAddModal,
+  buildSpecialBonusModal,
+  buildSpecialBonusRejectModal,
   buildTodoAddModal,
   buildTodoEditModal,
   buildTimerSetupModal,
@@ -202,7 +213,14 @@ interface ContributionSession {
   threadId?: string | null;
 }
 
+interface SpecialBonusSession {
+  monthKey: string;
+  userId?: string;
+  threadId?: string | null;
+}
+
 const contributionSessions = new Map<string, ContributionSession>();
+const specialBonusSessions = new Map<string, SpecialBonusSession>();
 const userGradeSessions = new Map<string, { userId: string }>();
 
 function roleBulkSessionKey(userId: string, threadId: string): string {
@@ -395,6 +413,69 @@ function buildRewardSettingsContent(summary: RewardSettingsSummary): string {
     "[規模倍率]",
     ...scaleLines
   ].join("\n").slice(0, 1900);
+}
+
+function buildSpecialBonusContent(monthKey: string, bonuses: SpecialBonusRecord[]): string {
+  const lines = bonuses.map((bonus) => {
+    const status = bonus.status === "pending" ? "承認待ち" : bonus.status === "approved" ? "承認済み" : "却下/取消";
+    const event = bonus.thread_id ? ` / <#${bonus.thread_id}>` : "";
+    return `#${bonus.id} [${status}] <@${bonus.user_id}> ${bonus.amount.toLocaleString("ja-JP")} Land${event}\n理由: ${bonus.reason}`;
+  });
+  return [
+    `🎖 特別貢献 (${monthKey})`,
+    "",
+    ...(lines.length > 0 ? lines : ["まだ記録はありません。"])
+  ].join("\n").slice(0, 1900);
+}
+
+function buildEvaluationReply(
+  runId: number,
+  index: number,
+  canManage: boolean
+): {
+  embeds: ReturnType<typeof buildEvaluationMaterialEmbed>[];
+  components: ReturnType<typeof buildPayrollEvaluationComponents>;
+} {
+  const payroll = new PayrollService(getDb());
+  const evaluation = new EvaluationService(getDb());
+  const run = payroll.getRun(runId);
+  const items = payroll.listItems(run.id);
+  if (items.length === 0) {
+    throw new Error("評価対象の支給明細がありません。");
+  }
+  const safeIndex = Math.min(Math.max(0, index), items.length - 1);
+  const item = items[safeIndex];
+  if (!item) {
+    throw new Error("評価対象の支給明細がありません。");
+  }
+  const material = evaluation.buildEvaluationMaterial(item.user_id, run.month_key);
+  return {
+    embeds: [buildEvaluationMaterialEmbed(run, item, material, safeIndex, items.length)],
+    components: buildPayrollEvaluationComponents(run, items, safeIndex, canManage)
+  };
+}
+
+async function postSpecialBonusApproval(
+  client: Client,
+  repos: ReturnType<typeof createRepos>,
+  bonus: SpecialBonusRecord
+): Promise<void> {
+  const channelId = repos.settingsRepo.getOptional("leadOnly");
+  if (!channelId) {
+    return;
+  }
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel || !("send" in channel)) {
+    return;
+  }
+  await channel.send({
+    content: [
+      `🎖 特別貢献の承認待ち: <@${bonus.user_id}> に ${bonus.amount.toLocaleString("ja-JP")} Land`,
+      `理由: ${bonus.reason}`,
+      `起票: <@${bonus.created_by}>`
+    ].join("\n"),
+    components: buildSpecialBonusDecisionComponents(bonus.id)
+  });
 }
 
 function rewardService(repos: ReturnType<typeof createRepos>): RewardsService {
@@ -743,6 +824,81 @@ export function registerInteractionCreateListener(client: Client): void {
           }
         }
 
+        if (namespace === "bonus") {
+          const member = await fetchGuildMember(interaction);
+          const bonusService = new SpecialBonusService(getDb());
+          const payrollService = new PayrollService(getDb());
+
+          if (action === "panel") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const monthKey = payrollService.defaultMonthKey();
+            const bonuses = bonusService.listByMonth(monthKey);
+            const canManage = canManageRewardSettings(interaction.user.id, member, repos);
+            await interaction.reply({
+              content: buildSpecialBonusContent(monthKey, bonuses),
+              components: buildSpecialBonusPanelComponents(monthKey, bonuses, canManage),
+              ephemeral: true
+            });
+            return;
+          }
+
+          if (action === "new") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const monthKey = threadId;
+            specialBonusSessions.set(interaction.user.id, { monthKey });
+            await interaction.update({
+              content: `特別貢献の対象ユーザーを選んでください。対象月: ${monthKey}`,
+              components: buildSpecialBonusUserSelect(monthKey)
+            });
+            return;
+          }
+
+          if (action === "event-skip") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const session = specialBonusSessions.get(interaction.user.id);
+            if (!session?.userId) {
+              throw new Error("特別貢献の入力が途中で切れました。最初からやり直してください。");
+            }
+            session.threadId = null;
+            await interaction.showModal(buildSpecialBonusModal(threadId));
+            return;
+          }
+
+          if (action === "approve") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const bonus = bonusService.approve(interaction.user.id, Number(threadId));
+            payrollService.syncSpecialBonusForUser(interaction.user.id, bonus.month_key, bonus.user_id);
+            await interaction.update({
+              content: `特別貢献 #${bonus.id} を承認しました。<@${bonus.user_id}> に ${bonus.amount.toLocaleString("ja-JP")} Land`,
+              components: []
+            });
+            return;
+          }
+
+          if (action === "reject") {
+            assertRewardManager(interaction.user.id, member, repos);
+            await interaction.showModal(buildSpecialBonusRejectModal(Number(threadId)));
+            return;
+          }
+
+          if (action === "cancel") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const bonus = bonusService.cancelApproved(interaction.user.id, Number(threadId));
+            payrollService.syncSpecialBonusForUser(interaction.user.id, bonus.month_key, bonus.user_id);
+            await interaction.update({
+              content: `特別貢献 #${bonus.id} を取り消しました。`,
+              components: []
+            });
+            return;
+          }
+        }
+
         if (namespace === "payroll") {
           const member = await fetchGuildMember(interaction);
           const service = new PayrollService(getDb());
@@ -759,6 +915,55 @@ export function registerInteractionCreateListener(client: Client): void {
               components: buildPayrollRunComponents(run, items, 0),
               ephemeral: true
             });
+            return;
+          }
+
+          if (action === "evaluate") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const runId = Number(threadId);
+            const index = Math.max(0, Number(parts[3] ?? 0));
+            const canManage = canManageRewardSettings(interaction.user.id, member, repos);
+            await interaction.update(buildEvaluationReply(runId, index, canManage));
+            return;
+          }
+
+          if (action === "eval-page") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const runId = Number(threadId);
+            const index = Math.max(0, Number(parts[3] ?? 0));
+            const canManage = canManageRewardSettings(interaction.user.id, member, repos);
+            await interaction.update(buildEvaluationReply(runId, index, canManage));
+            return;
+          }
+
+          if (action === "eval-set") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const runId = Number(threadId);
+            const userId = parts[3];
+            const amount = Number(parts[4]);
+            const index = Math.max(0, Number(parts[5] ?? 0));
+            if (!userId || !Number.isInteger(amount)) {
+              throw new Error("評価ボーナスの指定が不正です。");
+            }
+            service.updateEvalBonus(interaction.user.id, runId, userId, amount);
+            await interaction.update(buildEvaluationReply(runId, index, true));
+            return;
+          }
+
+          if (action === "eval-custom") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const runId = Number(threadId);
+            const userId = parts[3];
+            const index = Math.max(0, Number(parts[4] ?? 0));
+            if (!userId) {
+              throw new Error("評価対象ユーザーが指定されていません。");
+            }
+            const item = service.getItemForUser(runId, userId);
+            await interaction.showModal(buildPayrollEvalCustomModal(runId, userId, index, item.eval_bonus));
             return;
           }
 
@@ -2079,6 +2284,20 @@ export function registerInteractionCreateListener(client: Client): void {
           }
         }
 
+        if (namespace === "bonus" && action === "event") {
+          const member = await fetchGuildMember(interaction);
+          if (interaction.user.id !== config.ownerId) {
+            assertLeadOrSub(member, repos.settingsRepo);
+          }
+          const session = specialBonusSessions.get(interaction.user.id);
+          if (!session?.userId) {
+            throw new Error("特別貢献の入力が途中で切れました。最初からやり直してください。");
+          }
+          session.threadId = value;
+          await interaction.showModal(buildSpecialBonusModal(threadId));
+          return;
+        }
+
         if (namespace === "event" && action === "status-select") {
           if (!isEventStatus(value)) {
             throw new Error("未知の状態です。");
@@ -2433,6 +2652,28 @@ export function registerInteractionCreateListener(client: Client): void {
           return;
         }
 
+        if (namespace === "bonus" && action === "user") {
+          const userId = interaction.values[0];
+          if (!userId) {
+            return;
+          }
+          const repos = createRepos(getDb());
+          const member = await fetchGuildMember(interaction);
+          if (interaction.user.id !== config.ownerId) {
+            assertLeadOrSub(member, repos.settingsRepo);
+          }
+          const session = specialBonusSessions.get(interaction.user.id);
+          if (!session) {
+            throw new Error("特別貢献の入力が途中で切れました。最初からやり直してください。");
+          }
+          session.userId = userId;
+          await interaction.update({
+            content: "関連イベントを選んでください。不要ならイベントなしで進めます。",
+            components: buildSpecialBonusEventSelect(session.monthKey, repos.eventsRepo.listRecent(25))
+          });
+          return;
+        }
+
         if (namespace === "payroll" && action === "item-user" && threadId) {
           const userId = interaction.values[0];
           if (!userId) {
@@ -2634,6 +2875,71 @@ export function registerInteractionCreateListener(client: Client): void {
             components: buildAdminPanelComponents()
           });
           return;
+        }
+
+        if (namespace === "payroll" && action === "eval-custom-submit") {
+          await interaction.deferReply({ ephemeral: true });
+          const repos = createRepos(getDb());
+          const member = await fetchGuildMember(interaction);
+          assertRewardManager(interaction.user.id, member, repos);
+          const runId = Number(threadId);
+          const userId = parts[3];
+          const index = Math.max(0, Number(parts[4] ?? 0));
+          if (!userId) {
+            throw new Error("評価対象ユーザーが指定されていません。");
+          }
+          const amount = parseIntField(interaction.fields.getTextInputValue("amount"), "評価ボーナス");
+          new PayrollService(getDb()).updateEvalBonus(interaction.user.id, runId, userId, amount);
+          await interaction.editReply({
+            content: `評価ボーナスを ${amount.toLocaleString("ja-JP")} Land に更新しました。`,
+            ...buildEvaluationReply(runId, index, true)
+          });
+          return;
+        }
+
+        if (namespace === "bonus") {
+          await interaction.deferReply({ ephemeral: true });
+          const repos = createRepos(getDb());
+          const member = await fetchGuildMember(interaction);
+          const bonusService = new SpecialBonusService(getDb());
+          const payrollService = new PayrollService(getDb());
+
+          if (action === "create-submit") {
+            if (interaction.user.id !== config.ownerId) {
+              assertLeadOrSub(member, repos.settingsRepo);
+            }
+            const session = specialBonusSessions.get(interaction.user.id);
+            if (!session?.userId || session.monthKey !== threadId) {
+              throw new Error("特別貢献の入力が途中で切れました。最初からやり直してください。");
+            }
+            const amount = parseIntField(interaction.fields.getTextInputValue("amount"), "金額");
+            const reason = interaction.fields.getTextInputValue("reason").trim();
+            const bonus = bonusService.create({
+              actorId: interaction.user.id,
+              userId: session.userId,
+              amount,
+              reason,
+              threadId: session.threadId ?? null,
+              monthKey: session.monthKey
+            });
+            specialBonusSessions.delete(interaction.user.id);
+            await postSpecialBonusApproval(interaction.client, repos, bonus);
+            await interaction.editReply({
+              content: `特別貢献 #${bonus.id} を起票しました。統括の承認待ちです。`
+            });
+            return;
+          }
+
+          if (action === "reject-submit") {
+            assertRewardManager(interaction.user.id, member, repos);
+            const reason = interaction.fields.getTextInputValue("reason").trim() || null;
+            const bonus = bonusService.reject(interaction.user.id, Number(threadId), reason);
+            payrollService.syncSpecialBonusForUser(interaction.user.id, bonus.month_key, bonus.user_id);
+            await interaction.editReply({
+              content: `特別貢献 #${bonus.id} を却下しました。`
+            });
+            return;
+          }
         }
 
         if (namespace === "reward") {

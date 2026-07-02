@@ -251,6 +251,65 @@ export function buildContributionNoteModal(): ModalBuilder {
     );
 }
 
+export function buildPayrollEvalCustomModal(runId: number, userId: string, index: number, currentAmount: number): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`payroll:eval-custom-submit:${runId}:${userId}:${index}`)
+    .setTitle("評価ボーナス額")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("amount")
+          .setLabel("評価ボーナス額 Land")
+          .setPlaceholder("例: 15000")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setValue(String(currentAmount))
+      )
+    );
+}
+
+export function buildSpecialBonusModal(monthKey: string): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`bonus:create-submit:${monthKey}`)
+    .setTitle("特別貢献を起票")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("amount")
+          .setLabel("金額 Land")
+          .setPlaceholder("例: 5000")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("reason")
+          .setLabel("理由")
+          .setPlaceholder("例: 当日の欠員フォロー")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMaxLength(1000)
+      )
+    );
+}
+
+export function buildSpecialBonusRejectModal(bonusId: number): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`bonus:reject-submit:${bonusId}`)
+    .setTitle("特別貢献を却下")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("reason")
+          .setLabel("却下理由")
+          .setPlaceholder("任意")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false)
+          .setMaxLength(1000)
+      )
+    );
+}
+
 export function buildAnnouncementCustomTimeModal(sessionId: string): ModalBuilder {
   return new ModalBuilder()
     .setCustomId(`ann:custom-time-submit:${sessionId}`)

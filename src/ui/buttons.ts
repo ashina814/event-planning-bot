@@ -39,6 +39,7 @@ import type {
   RoleRewardRecord
 } from "../features/rewards/service.js";
 import type { PayrollItemRecord, PayrollRunRecord } from "../features/payroll/service.js";
+import type { SpecialBonusRecord } from "../features/bonus/service.js";
 import { mainRoleKey, roleKeyFor, roleLabel } from "../db/repos/roles.js";
 import { formatJstDateTime } from "../lib/time.js";
 
@@ -1327,6 +1328,13 @@ export function buildLeadDashboardComponents(): ActionRowBuilder<ButtonBuilder>[
         .setCustomId("reward:contribution-list:panel")
         .setLabel("貢献一覧")
         .setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("bonus:panel:panel")
+        .setEmoji("🎖")
+        .setLabel("特別貢献")
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }
@@ -1548,12 +1556,64 @@ export function buildPayrollRunComponents(
         .setStyle(ButtonStyle.Success)
         .setDisabled(run.status === "finalized")
     ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`payroll:evaluate:${run.id}:0`)
+        .setLabel("評価入力へ")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(items.length === 0)
+    ),
     new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
       new UserSelectMenuBuilder()
         .setCustomId(`payroll:item-user:${run.id}`)
         .setPlaceholder("個人明細を見る")
         .setMinValues(1)
         .setMaxValues(1)
+    )
+  ];
+}
+
+export function buildPayrollEvaluationComponents(
+  run: PayrollRunRecord,
+  items: PayrollItemRecord[],
+  index: number,
+  canManage: boolean
+): ActionRowBuilder<ButtonBuilder>[] {
+  const safeIndex = Math.min(Math.max(0, index), Math.max(0, items.length - 1));
+  const item = items[safeIndex];
+  if (!item) {
+    return [];
+  }
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`payroll:eval-page:${run.id}:${Math.max(0, safeIndex - 1)}`)
+        .setLabel("前へ")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safeIndex <= 0),
+      new ButtonBuilder()
+        .setCustomId(`payroll:eval-page:${run.id}:${Math.min(items.length - 1, safeIndex + 1)}`)
+        .setLabel("次へ")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safeIndex >= items.length - 1),
+      new ButtonBuilder()
+        .setCustomId(`payroll:page:${run.id}:0`)
+        .setLabel("支給案へ戻る")
+        .setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      ...[15000, 10000, 5000, 0].map((amount) =>
+        new ButtonBuilder()
+          .setCustomId(`payroll:eval-set:${run.id}:${item.user_id}:${amount}:${safeIndex}`)
+          .setLabel(amount.toLocaleString("ja-JP"))
+          .setStyle(amount === 0 ? ButtonStyle.Secondary : ButtonStyle.Primary)
+          .setDisabled(!canManage || run.status === "finalized")
+      ),
+      new ButtonBuilder()
+        .setCustomId(`payroll:eval-custom:${run.id}:${item.user_id}:${safeIndex}`)
+        .setLabel("カスタム")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(!canManage || run.status === "finalized")
     )
   ];
 }
@@ -1572,6 +1632,110 @@ export function buildPayrollItemComponents(runId: number, item: PayrollItemRecor
         .setCustomId(`payroll:cap:${runId}:${item.user_id}:keep`)
         .setLabel("超過のまま")
         .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+export function buildSpecialBonusPanelComponents(
+  monthKey: string,
+  bonuses: SpecialBonusRecord[],
+  canManage: boolean
+): ActionRowBuilder<ButtonBuilder>[] {
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`bonus:new:${monthKey}`)
+        .setLabel("特別貢献を起票")
+        .setStyle(ButtonStyle.Primary)
+    )
+  ];
+
+  for (const bonus of bonuses.slice(0, 4)) {
+    const row = new ActionRowBuilder<ButtonBuilder>();
+    if (bonus.status === "pending") {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`bonus:approve:${bonus.id}`)
+          .setLabel(`#${bonus.id} 承認`)
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(!canManage),
+        new ButtonBuilder()
+          .setCustomId(`bonus:reject:${bonus.id}`)
+          .setLabel(`#${bonus.id} 却下`)
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(!canManage)
+      );
+      rows.push(row);
+    } else if (bonus.status === "approved") {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`bonus:cancel:${bonus.id}`)
+          .setLabel(`#${bonus.id} 取り消す`)
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(!canManage)
+      );
+      rows.push(row);
+    }
+  }
+
+  return rows;
+}
+
+export function buildSpecialBonusUserSelect(monthKey: string): ActionRowBuilder<UserSelectMenuBuilder>[] {
+  return [
+    new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+      new UserSelectMenuBuilder()
+        .setCustomId(`bonus:user:${monthKey}`)
+        .setPlaceholder("特別貢献の対象ユーザー")
+        .setMinValues(1)
+        .setMaxValues(1)
+    )
+  ];
+}
+
+export function buildSpecialBonusEventSelect(
+  monthKey: string,
+  events: EventRecord[]
+): Array<ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>> {
+  const rows: Array<ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>> = [];
+  if (events.length > 0) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`bonus:event:${monthKey}`)
+          .setPlaceholder("関連イベントを選んでください")
+          .addOptions(
+            events.slice(0, 25).map((event) => ({
+              label: event.title.slice(0, 100),
+              value: event.thread_id,
+              description: event.scheduled_at ? formatJstDateTime(event.scheduled_at) : "開催日時未定"
+            }))
+          )
+      )
+    );
+  }
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`bonus:event-skip:${monthKey}`)
+        .setLabel("イベントなしで進める")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
+  return rows;
+}
+
+export function buildSpecialBonusDecisionComponents(bonusId: number): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`bonus:approve:${bonusId}`)
+        .setLabel("承認")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`bonus:reject:${bonusId}`)
+        .setLabel("却下")
+        .setStyle(ButtonStyle.Danger)
     )
   ];
 }
